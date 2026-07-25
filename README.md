@@ -238,7 +238,7 @@ app**, revoke its **model key**, and remove its **Aegis registry entry**.
 
 ## Cost & full cleanup
 
-Each VM is a burstable **B2s_v2** (~$30–40/mo if left on; far less for a short test). Tear the whole
+Each VM is a **Standard_D2s_v3** (~$70-90/mo if left on; far less for a short test). Tear the whole
 fleet down when done:
 
 ```bash
