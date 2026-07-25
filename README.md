@@ -1,6 +1,6 @@
 # Agent Fleet — Bicep IaC + Walkthrough Runbook
 
-Stand up an **Argus-profile VM** and a **Keel-profile VM**, add a **second Argus VM through the
+Stand up a **Castor-profile VM** and a **Keel-profile VM**, add a **second Castor VM through the
 frontend**, then **decommission it** — testing each for functionality. One converged image, one
 Bicep module, per-agent isolation, Cloudflare-Tunnel transport.
 
@@ -15,11 +15,11 @@ Bicep module, per-agent isolation, Cloudflare-Tunnel transport.
 
 | Agent | Profile | Role | Resource group |
 |---|---|---|---|
-| **heimdall** | `argus` | multi-interface assistant | `rg-heimdall` |
+| **heimdall** | `castor` | multi-interface assistant | `rg-heimdall` |
 | **helm** | `keel` | portfolio-management engine | `rg-helm` |
-| **cerberus** | `argus` | added **via the frontend**, then decommissioned | `rg-cerberus` |
+| **cerberus** | `castor` | added **via the frontend**, then decommissioned | `rg-cerberus` |
 
-**One architecture, not two:** `argus` and `helm`/`keel` are the *same* image and the *same* module —
+**One architecture, not two:** `castor` and `helm`/`keel` are the *same* image and the *same* module —
 only the `agentProfile` parameter and the per-agent data differ. Each agent is its own resource
 group (a clean bulkhead: decommission = delete the group). No public IP by default; the webchat
 rides an outbound-only Cloudflare Tunnel.
@@ -40,7 +40,7 @@ agent-fleet-iac/
 │   ├── main.bicep                    # subscription-scoped: RG + VM module
 │   ├── modules/vm.bicep              # network + compute (no public IP unless SSH_CIDR set)
 │   ├── cloud-init/agent-cloudflared.yaml
-│   └── params/{argus,keel}.bicepparam
+│   └── params/{castor,keel}.bicepparam
 ├── scripts/{deploy,decommission,smoke-test}.sh
 ├── aegis/aegis-provision.js          # the frontend "Add/Decommission" endpoint (stub)
 └── README.md                          # this runbook
@@ -85,21 +85,21 @@ dashboard → **Networks → Tunnels → Create tunnel** (name it after the agen
 
 ---
 
-## Part 1 — stand up **heimdall** (Argus profile)
+## Part 1 — stand up **heimdall** (Castor profile)
 
 ```bash
 export CF_TUNNEL_TOKEN="<heimdall tunnel token>"
-scripts/deploy.sh argus heimdall
+scripts/deploy.sh castor heimdall
 ```
 
 Expected (trimmed):
 
 ```
->> Deploying agent 'heimdall' (profile: argus) to eastus2
+>> Deploying agent 'heimdall' (profile: castor) to eastus2
 >> SSH bootstrap open from: 203.0.113.5/32 (public IP created)
 {
   "rg": "rg-heimdall",
-  "profile": "argus",
+  "profile": "castor",
   "publicIp": true,
   "privateIp": "10.30.0.4"
 }
@@ -153,7 +153,7 @@ open `https://helm.<yourdomain>`.
 
 **What differs from heimdall:** same image, `agentProfile=keel` written to `.provision-flags`. The
 Keel profile is the portfolio engine — try a portfolio skill in the webchat (e.g. ask it to score an
-item with WSJF/RICE, or normalize a small backlog). The Argus profile is where you'd instead enable
+item with WSJF/RICE, or normalize a small backlog). The Castor profile is where you'd instead enable
 the Telegram/email interfaces and the drafting skill set.
 
 > ✅ **Helm checklist:** RG `Succeeded` · profile shows `keel` · webchat reachable · a
@@ -161,7 +161,7 @@ the Telegram/email interfaces and the drafting skill set.
 
 ---
 
-## Part 3 — add **cerberus** (Argus) **through the frontend**
+## Part 3 — add **cerberus** (Castor) **through the frontend**
 
 The frontend "Add agent" button calls the Aegis provisioning endpoint (`aegis/aegis-provision.js`),
 which is a thin wrapper over the **same** `deploy.sh`. On the Aegis host (with the least-privilege
@@ -171,16 +171,16 @@ service principal logged in and per-agent secrets in the vault):
 # what the frontend button does under the hood:
 curl -X POST http://127.0.0.1:7070/agents \
   -H 'content-type: application/json' \
-  -d '{"name":"cerberus","profile":"argus"}'
-# -> { "status": "provisioning", "name": "cerberus", "profile": "argus", "log": "...rg-cerberus..." }
+  -d '{"name":"cerberus","profile":"castor"}'
+# -> { "status": "provisioning", "name": "cerberus", "profile": "castor", "log": "...rg-cerberus..." }
 ```
 
-Because the endpoint just shells out to `deploy.sh argus cerberus`, the CLI equivalent is identical
+Because the endpoint just shells out to `deploy.sh castor cerberus`, the CLI equivalent is identical
 (use this if you're testing before wiring the endpoint):
 
 ```bash
 export CF_TUNNEL_TOKEN="<cerberus tunnel token>"
-scripts/deploy.sh argus cerberus
+scripts/deploy.sh castor cerberus
 ```
 
 Bootstrap + test exactly as in Part 1, at `https://cerberus.<yourdomain>`.
@@ -271,7 +271,7 @@ scripts/decommission.sh helm
 | Artifact | Tool | Result |
 |---|---|---|
 | `bicep/main.bicep` (+ vm module) | `bicep build` v0.45.15 | compiles, **0 warnings / 0 errors** |
-| `params/argus.bicepparam` | `bicep build-params` | OK |
+| `params/castor.bicepparam` | `bicep build-params` | OK |
 | `params/keel.bicepparam` | `bicep build-params` | OK |
 | `scripts/*.sh` | `bash -n` | all OK |
 | `aegis/aegis-provision.js` | `node --check` | OK |

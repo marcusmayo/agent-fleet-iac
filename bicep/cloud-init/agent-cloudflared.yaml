@@ -1,5 +1,5 @@
 #cloud-config
-# Converged agent base (Argus/Keel) with Cloudflare Tunnel transport.
+# Converged agent base (Castor/Keel) with Cloudflare Tunnel transport.
 # Placeholders (double-underscore tokens) are injected by vm.bicep at deploy
 # time. The tunnel token is the ONLY secret in customData and is scrubbed from
 # cloud logs after cloudflared installs. Runtime secrets (TOTP, model API key)

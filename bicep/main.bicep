@@ -1,6 +1,6 @@
 // main.bicep — subscription-scoped entrypoint for ONE agent.
 // One agent = one resource group (bulkhead) + one VM. The `agentProfile`
-// parameter selects Argus (multi-interface) vs Keel (portfolio) behaviour;
+// parameter selects Castor (multi-interface) vs Keel (portfolio) behaviour;
 // both are the SAME converged image, differentiated only by config.
 // Decommission = delete the resource group (see scripts/decommission.sh).
 targetScope = 'subscription'
@@ -12,7 +12,7 @@ param agentName string
 
 @description('Agent profile. Same image, different config profile.')
 @allowed([
-  'argus'
+  'castor'
   'keel'
 ])
 param agentProfile string

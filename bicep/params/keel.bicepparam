@@ -1,7 +1,7 @@
 using '../main.bicep'
 
 // Keel profile — portfolio-management engine (deterministic WSJF/RICE tools,
-// backlog normalize/reconcile, Excel round-trip). Same image as Argus; the
+// backlog normalize/reconcile, Excel round-trip). Same image as Castor; the
 // profile toggles which skills/interfaces are active.
 // Values come from environment variables set by scripts/deploy.sh.
 

@@ -19,7 +19,7 @@ app.use(express.json());
 
 const FLEET_DIR = process.env.FLEET_DIR || '/opt/fleet';
 const NAME_RE = /^[a-z][a-z0-9-]{1,23}$/;          // deterministic; blocks injection
-const PROFILES = ['argus', 'keel'];
+const PROFILES = ['castor', 'keel'];
 
 // --- auth gate: require the same Aegis operator session the webchat uses ---
 app.use((req, res, next) => {
@@ -43,7 +43,7 @@ function run(script, args, extraEnv = {}) {
 app.post('/agents', async (req, res) => {
   const { name, profile } = req.body || {};
   if (!NAME_RE.test(name || '')) return res.status(400).json({ error: 'invalid agent name' });
-  if (!PROFILES.includes(profile)) return res.status(400).json({ error: 'profile must be argus|keel' });
+  if (!PROFILES.includes(profile)) return res.status(400).json({ error: 'profile must be castor|keel' });
   try {
     const env = await vaultEnvForAgent(name);      // { CF_TUNNEL_TOKEN, SSH_PUBKEY, SSH_CIDR? }
     const log = await run('scripts/deploy.sh', [profile, name], env);

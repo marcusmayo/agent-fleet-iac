@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Deploy ONE agent VM (its own resource group).
-# Usage:  scripts/deploy.sh <argus|keel> <agentName>
+# Usage:  scripts/deploy.sh <castor|keel> <agentName>
 # Requires env: CF_TUNNEL_TOKEN, SSH_PUBKEY   (SSH_CIDR optional, AZ_LOCATION optional)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-PROFILE="${1:?usage: deploy.sh <argus|keel> <agentName>}"
-NAME="${2:?usage: deploy.sh <argus|keel> <agentName>}"
+PROFILE="${1:?usage: deploy.sh <castor|keel> <agentName>}"
+NAME="${2:?usage: deploy.sh <castor|keel> <agentName>}"
 case "$PROFILE" in
-  argus|keel) ;;
-  *) echo "ABORT: profile must be 'argus' or 'keel'"; exit 1 ;;
+  castor|keel) ;;
+  *) echo "ABORT: profile must be 'castor' or 'keel'"; exit 1 ;;
 esac
 [[ "$NAME" =~ ^[a-z][a-z0-9-]{1,23}$ ]] || { echo "ABORT: agentName must be lowercase [a-z0-9-], 2-24 chars"; exit 1; }
 
