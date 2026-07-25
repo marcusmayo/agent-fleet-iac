@@ -1,0 +1,8 @@
+# secrets & local artifacts — never commit
+*.env
+.env
+*.pem
+id_ed25519*
+agentfleet*
+.provision-flags
+*.tfstate*

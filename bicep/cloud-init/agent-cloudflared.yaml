@@ -1,0 +1,27 @@
+#cloud-config
+# Converged agent base (Argus/Keel) with Cloudflare Tunnel transport.
+# Placeholders (double-underscore tokens) are injected by vm.bicep at deploy
+# time. The tunnel token is the ONLY secret in customData and is scrubbed from
+# cloud logs after cloudflared installs. Runtime secrets (TOTP, model API key)
+# are injected later via bootstrap over SSH — never in this file.
+package_update: true
+packages: [docker.io, docker-compose-v2, git, python3-qrcode, curl]
+runcmd:
+  - set -e
+  # --- Cloudflare Tunnel (outbound-only; no inbound ports required) ---
+  - install -m 0755 -d /usr/share/keyrings
+  - curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
+  - echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared noble main' > /etc/apt/sources.list.d/cloudflared.list
+  - apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y cloudflared
+  - cloudflared service install '__CF_TUNNEL_TOKEN__'
+  - grep -rl 'eyJ' /var/lib/cloud/ 2>/dev/null | xargs -r sed -i 's/eyJ[A-Za-z0-9._-]\{16,\}/CF-TOKEN-SCRUBBED/g'
+  # --- Container runtime + agent image (hash-pinned build, per repo) ---
+  - systemctl enable --now docker
+  - git clone '__REPO_URL__' /home/__ADMIN_USER__/agent
+  - 'if [ -n "__REPO_REF__" ]; then git -C /home/__ADMIN_USER__/agent checkout --quiet "__REPO_REF__" || { echo "ABORT: repoRef __REPO_REF__ did not resolve" | tee /var/log/agent-image-build.log; exit 1; }; fi'
+  - 'git -C /home/__ADMIN_USER__/agent rev-parse HEAD | tee /var/log/agent-built-sha.log'
+  - printf 'AGENT_PROFILE=%s\n' '__AGENT_PROFILE__' > /home/__ADMIN_USER__/agent/.provision-flags
+  - cd /home/__ADMIN_USER__/agent && ./infra/scripts/build-image.sh > /var/log/agent-image-build.log 2>&1
+  - chown -R __ADMIN_USER__:__ADMIN_USER__ /home/__ADMIN_USER__/agent
+  - "{ dpkg-query -W docker.io docker-compose-v2 git cloudflared; } > /var/log/agent-provision-versions.log 2>&1"
+final_message: "agent (__AGENT_PROFILE__) cloud-init complete after $UPTIME s -- next: SSH in, run infra/scripts/bootstrap.sh, then reach the webchat via its Cloudflare hostname"
