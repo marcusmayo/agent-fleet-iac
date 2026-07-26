@@ -15,15 +15,36 @@ param sshAccessCidr string
 param cloudflareTunnelToken string
 param repoUrl string
 param repoRef string
+param deployerObjectId string = ''
 
 var vmName = '${agentName}-vm'
 var useSsh = !empty(sshAccessCidr)
 
+// --- Castor-profile vault/identity/backup gate ---
+// Keel is unchanged. For Castor, port Castor's Terraform: a per-agent Key Vault,
+// a user-assigned managed identity, and identity-based blob backup. Operator
+// secrets are set post-apply via `az keyvault secret set` (none are created here);
+// bootstrap.sh fetches them at first login via the MI with a retry loop to absorb
+// RBAC propagation lag (Bicep has no time_sleep equivalent).
+var wantsVault = agentProfile == 'castor'
+var suffix = substring(uniqueString(subscription().id, agentName), 0, 5)
+var kvName = '${agentName}-kv-${suffix}'
+var saName = toLower('${agentName}sa${suffix}')
+var uaiName = '${agentName}-identity'
+// Built-in role definition GUIDs (stable across clouds).
+var roleKvSecretsUser = '4633458b-17de-408a-b874-0445c86b69e6'
+var roleKvSecretsOfficer = 'b86a8fe4-44ce-4948-aab7-e9b7d7e1c0e5'
+var roleStorageBlobContributor = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+
 // cloud-init: one file, placeholders replaced at deploy time. The tunnel token is
 // the only secret in customData and is scrubbed from cloud logs after install;
 // runtime secrets (TOTP, model key) are injected later via bootstrap over SSH.
+// For Castor, the vault name and MI client id are written into .provision-flags so
+// bootstrap.sh can do a non-interactive managed-identity fetch; empty for Keel.
 var ciRaw = loadTextContent('../cloud-init/agent-cloudflared.yaml')
-var ciFinal = replace(replace(replace(replace(replace(ciRaw, '__CF_TUNNEL_TOKEN__', cloudflareTunnelToken), '__AGENT_PROFILE__', agentProfile), '__ADMIN_USER__', adminUsername), '__REPO_URL__', repoUrl), '__REPO_REF__', repoRef)
+var kvNameForCi = wantsVault ? kvName : ''
+var msiClientIdForCi = wantsVault ? uai!.properties.clientId : ''
+var ciFinal = replace(replace(replace(replace(replace(replace(replace(ciRaw, '__CF_TUNNEL_TOKEN__', cloudflareTunnelToken), '__AGENT_PROFILE__', agentProfile), '__ADMIN_USER__', adminUsername), '__REPO_URL__', repoUrl), '__REPO_REF__', repoRef), '__KEY_VAULT_NAME__', kvNameForCi), '__MSI_CLIENT_ID__', msiClientIdForCi)
 
 var sshAllowRule = [
   {
@@ -117,9 +138,107 @@ resource nic 'Microsoft.Network/networkInterfaces@2023-11-01' = {
   }
 }
 
+// --- Castor-profile: managed identity, per-agent Key Vault, identity-based backup ---
+resource uai 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = if (wantsVault) {
+  name: uaiName
+  location: location
+}
+
+resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = if (wantsVault) {
+  name: kvName
+  location: location
+  properties: {
+    tenantId: subscription().tenantId
+    sku: {
+      family: 'A'
+      name: 'standard'
+    }
+    // RBAC data plane (no access policies); operator writes secrets post-apply.
+    enableRbacAuthorization: true
+    enableSoftDelete: true
+    softDeleteRetentionInDays: 7
+    // Purge protection intentionally omitted (off) for a clean teardown — demo
+    // posture; set enablePurgeProtection: true for a durable deployment.
+  }
+}
+
+resource backupStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = if (wantsVault) {
+  name: saName
+  location: location
+  sku: {
+    name: 'Standard_LRS'
+  }
+  kind: 'StorageV2'
+  properties: {
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+    // Backups are written by the VM's managed identity — no account keys on the VM.
+    allowBlobPublicAccess: false
+  }
+}
+
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = if (wantsVault) {
+  parent: backupStorage
+  name: 'default'
+  properties: {
+    isVersioningEnabled: true
+    deleteRetentionPolicy: {
+      enabled: true
+      days: 14
+    }
+  }
+}
+
+resource backupsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = if (wantsVault) {
+  parent: blobService
+  name: 'backups'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+// identity -> read secrets
+resource raKvSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (wantsVault) {
+  name: guid(kv.id, uaiName, roleKvSecretsUser)
+  scope: kv
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleKvSecretsUser)
+    principalId: uai!.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// identity -> write backups (data plane; no account keys on the VM)
+resource raStorageBlob 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (wantsVault) {
+  name: guid(backupStorage.id, uaiName, roleStorageBlobContributor)
+  scope: backupStorage
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleStorageBlobContributor)
+    principalId: uai!.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// deployer -> create the operator secrets post-apply (az keyvault secret set)
+resource raKvSecretsOfficer 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (wantsVault && !empty(deployerObjectId)) {
+  name: guid(kv.id, deployerObjectId, roleKvSecretsOfficer)
+  scope: kv
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleKvSecretsOfficer)
+    principalId: deployerObjectId
+    principalType: 'User'
+  }
+}
+
 resource vm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
   name: vmName
   location: location
+  identity: wantsVault ? {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${uai.id}': {}
+    }
+  } : null
   properties: {
     hardwareProfile: {
       vmSize: vmSize

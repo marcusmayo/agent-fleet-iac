@@ -20,8 +20,8 @@ param agentProfile string
 @description('Azure region.')
 param location string = 'eastus2'
 
-@description('VM size. Default B2s_v2: 2 vCPU / 8 GiB burstable — fits the spiky claude -p + Node workload.')
-param vmSize string = 'Standard_B2s_v2'
+@description('VM size. Default Standard_D2s_v3: 2 vCPU / 8 GiB — B2s_v2 is NotAvailableForSubscription on this subscription.')
+param vmSize string = 'Standard_D2s_v3'
 
 @description('Admin username on the VM.')
 param adminUsername string = 'agentadmin'
@@ -41,6 +41,9 @@ param repoUrl string = 'https://github.com/marcusmayo/keel-portfolio-management.
 
 @description('Git ref (branch, tag, or commit SHA) to check out for a reproducible, pinned build. Empty = default-branch HEAD. Pin this to the commit that carries your ADO lane.')
 param repoRef string = ''
+
+@description('AAD object id of the deploying principal, for the Key Vault Secrets Officer assignment (Castor profile only; empty for Keel). Fill via: az ad signed-in-user show --query id -o tsv')
+param deployerObjectId string = ''
 
 var rgName = 'rg-${agentName}'
 
@@ -68,6 +71,7 @@ module agentVm 'modules/vm.bicep' = {
     cloudflareTunnelToken: cloudflareTunnelToken
     repoUrl: repoUrl
     repoRef: repoRef
+    deployerObjectId: deployerObjectId
   }
 }
 
