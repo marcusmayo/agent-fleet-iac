@@ -21,8 +21,19 @@ export AGENT_NAME="$NAME"
 export CF_TUNNEL_TOKEN SSH_PUBKEY
 export SSH_CIDR="${SSH_CIDR:-}"
 export AZ_LOCATION="${AZ_LOCATION:-eastus2}"
-export REPO_URL="${REPO_URL:-https://github.com/marcusmayo/keel-portfolio-management.git}"
-export REPO_REF="${REPO_REF:-}"
+# REPO_URL/REPO_REF: pass through only if the caller set them; otherwise the
+# per-profile bicepparam default applies (keel -> keel repo, castor -> castor repo).
+if [ -n "${REPO_URL:-}" ]; then export REPO_URL; fi
+if [ -n "${REPO_REF:-}" ]; then export REPO_REF; fi
+
+# Castor's per-agent Key Vault grants the deployer 'Key Vault Secrets Officer' so
+# you can set the operator secrets post-apply. Resolve the signed-in user's object
+# id (override DEPLOYER_OBJECT_ID for service-principal deploys). Empty is fine —
+# the raKvSecretsOfficer assignment is simply skipped and can be granted manually.
+if [ "$PROFILE" = "castor" ] && [ -z "${DEPLOYER_OBJECT_ID:-}" ]; then
+  DEPLOYER_OBJECT_ID="$(az ad signed-in-user show --query id -o tsv 2>/dev/null || true)"
+fi
+export DEPLOYER_OBJECT_ID="${DEPLOYER_OBJECT_ID:-}"
 
 echo ">> Deploying agent '$NAME' (profile: $PROFILE) to $AZ_LOCATION"
 [ -n "$REPO_REF" ] && echo ">> Pinned build ref: $REPO_REF" || echo ">> Build ref: default-branch HEAD"

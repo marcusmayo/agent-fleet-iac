@@ -20,8 +20,11 @@ runcmd:
   - git clone '__REPO_URL__' /home/__ADMIN_USER__/agent
   - 'if [ -n "__REPO_REF__" ]; then git -C /home/__ADMIN_USER__/agent checkout --quiet "__REPO_REF__" || { echo "ABORT: repoRef __REPO_REF__ did not resolve" | tee /var/log/agent-image-build.log; exit 1; }; fi'
   - 'git -C /home/__ADMIN_USER__/agent rev-parse HEAD | tee /var/log/agent-built-sha.log'
-  - printf 'AGENT_PROFILE=%s\nKEY_VAULT_NAME=%s\nMSI_CLIENT_ID=%s\n' '__AGENT_PROFILE__' '__KEY_VAULT_NAME__' '__MSI_CLIENT_ID__' > /home/__ADMIN_USER__/agent/.provision-flags
-  - cd /home/__ADMIN_USER__/agent && ./infra/scripts/build-image.sh > /var/log/agent-image-build.log 2>&1
+  # Agent root: keel-style repos put infra/ at the clone root; Castor keeps it under
+  # scaffold/. Detect and use the right dir (safe no-op for keel — no scaffold/).
+  - 'if [ -d "/home/__ADMIN_USER__/agent/scaffold" ]; then AGENT_DIR="/home/__ADMIN_USER__/agent/scaffold"; else AGENT_DIR="/home/__ADMIN_USER__/agent"; fi; echo "agent dir: $AGENT_DIR"'
+  - printf 'AGENT_PROFILE=%s\nKEY_VAULT_NAME=%s\nMSI_CLIENT_ID=%s\n' '__AGENT_PROFILE__' '__KEY_VAULT_NAME__' '__MSI_CLIENT_ID__' > "$AGENT_DIR/.provision-flags"
+  - cd "$AGENT_DIR" && ./infra/scripts/build-image.sh > /var/log/agent-image-build.log 2>&1
   - chown -R __ADMIN_USER__:__ADMIN_USER__ /home/__ADMIN_USER__/agent
   - "{ dpkg-query -W docker.io docker-compose-v2 git cloudflared; } > /var/log/agent-provision-versions.log 2>&1"
 final_message: "agent (__AGENT_PROFILE__) cloud-init complete after $UPTIME s -- next: SSH in, run infra/scripts/bootstrap.sh, then reach the webchat via its Cloudflare hostname"
