@@ -33,7 +33,7 @@ var saName = toLower('${agentName}sa${suffix}')
 var uaiName = '${agentName}-identity'
 // Built-in role definition GUIDs (stable across clouds).
 var roleKvSecretsUser = '4633458b-17de-408a-b874-0445c86b69e6'
-var roleKvSecretsOfficer = 'b86a8fe4-44ce-4948-aab7-e9b7d7e1c0e5'
+var roleKvSecretsOfficer = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
 var roleStorageBlobContributor = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 
 // cloud-init: one file, placeholders replaced at deploy time. The tunnel token is
