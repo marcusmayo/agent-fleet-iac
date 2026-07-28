@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # set-secrets.sh - set the per-agent operator secrets in the agent's Key Vault
 # with fail-loud SHAPE VALIDATION, so a placeholder (e.g. "<OpenRouter key>") or a
 # wrong key can never reach the vault. This is the deploy-time structural guard;
