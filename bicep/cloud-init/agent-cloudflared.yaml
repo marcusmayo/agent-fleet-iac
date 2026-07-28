@@ -17,6 +17,7 @@ runcmd:
   - grep -rl 'eyJ' /var/lib/cloud/ 2>/dev/null | xargs -r sed -i 's/eyJ[A-Za-z0-9._-]\{16,\}/CF-TOKEN-SCRUBBED/g'
   # --- Container runtime + agent image (hash-pinned build, per repo) ---
   - systemctl enable --now docker
+  - usermod -aG docker __ADMIN_USER__
   - git clone '__REPO_URL__' /home/__ADMIN_USER__/agent
   - 'if [ -n "__REPO_REF__" ]; then git -C /home/__ADMIN_USER__/agent checkout --quiet "__REPO_REF__" || { echo "ABORT: repoRef __REPO_REF__ did not resolve" | tee /var/log/agent-image-build.log; exit 1; }; fi'
   - 'git -C /home/__ADMIN_USER__/agent rev-parse HEAD | tee /var/log/agent-built-sha.log'

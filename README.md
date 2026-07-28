@@ -108,18 +108,28 @@ Expected (trimmed):
 
 > ✅ **Check:** `az group show -n rg-heimdall -o table` shows `Succeeded`.
 
-**Bootstrap** (inject TOTP + model key — never stored in the template):
+**Set the operator secrets in the agent's Key Vault** — Castor's bootstrap fetches these at
+runtime via managed identity, so they never touch the template or disk:
+
+```bash
+KV=$(az keyvault list -g rg-heimdall --query "[0].name" -o tsv)
+az keyvault secret set --vault-name "$KV" --name model-api-key  --value "<OpenRouter/model key>"
+az keyvault secret set --vault-name "$KV" --name vision-api-key --value "<Anthropic vision key>"
+```
+
+**Bootstrap** — non-interactive: it fetches the secrets above via managed identity, generates
+and prints a TOTP QR to enrol, seeds the egress config, and brings the stack up:
 
 ```bash
 # public-IP path:
-PUBIP=$(az network public-ip show -g rg-heimdall -n heimdall-pip --query ipAddress -o tsv)
+PUBIP=$(az vm list-ip-addresses -g rg-heimdall --query "[0].virtualMachine.network.publicIpAddresses[0].ipAddress" -o tsv)
 ssh -i ~/.ssh/agentfleet agentadmin@"$PUBIP"
 # --- OR hardened path (no public IP): cloudflared access ssh --hostname ssh-heimdall.<domain>
 
 # on the VM:
 cd ~/agent
-tail -n 5 -f /var/log/agent-image-build.log     # wait for a line like "BUILT keel:<sha>", then Ctrl-C
-./infra/scripts/bootstrap.sh                     # scan the TOTP QR, paste your model API key
+tail -n 5 -f /var/log/agent-image-build.log     # wait for "BUILT castor:<sha>", then Ctrl-C
+./infra/scripts/bootstrap.sh                     # MI-fetches keys; scan the printed TOTP QR to enrol
 ```
 
 Expected tail of bootstrap: `publishing webchat on 127.0.0.1:8443` → smoke test → `bootstrap complete`.
@@ -224,8 +234,8 @@ app**, revoke its **model key**, and remove its **Aegis registry entry**.
 | Check | How | Pass = |
 |---|---|---|
 | Provisioned | `az group show -n rg-<name>` | `Succeeded` |
-| Image built | on VM: `grep -c 'BUILT keel' /var/log/agent-image-build.log` | ≥ 1 |
-| Container healthy | on VM: `sudo docker inspect -f '{{.State.Health.Status}}' keel-webchat` | `healthy` |
+| Image built | on VM: `grep -cE 'BUILT (keel|castor|atlas):' /var/log/agent-image-build.log` | ≥ 1 |
+| Container healthy | on VM: `curl -fsS http://127.0.0.1:8443/health/liveliness -o /dev/null && echo ok` | `ok` (HTTP 200) |
 | Webchat reachable | browser: `https://<name>.<domain>` (after Access) | page loads |
 | MFA enforced | webchat prompts for TOTP | prompt appears |
 | Redaction gate | on VM: `node gate/ask.js "email me at test@example.com"` then check `logs/audit.jsonl` | entity tokenized, audit entry appended |
