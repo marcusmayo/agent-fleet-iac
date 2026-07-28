@@ -112,9 +112,9 @@ Expected (trimmed):
 runtime via managed identity, so they never touch the template or disk:
 
 ```bash
-KV=$(az keyvault list -g rg-heimdall --query "[0].name" -o tsv)
-az keyvault secret set --vault-name "$KV" --name model-api-key  --value "<OpenRouter/model key>"
-az keyvault secret set --vault-name "$KV" --name vision-api-key --value "<Anthropic vision key>"
+# Validated wrapper: prompts (no echo) and rejects a placeholder or wrong key
+# before it reaches the vault (model-api-key must be sk-or-*, vision-api-key sk-ant-*).
+bash scripts/set-secrets.sh rg-heimdall
 ```
 
 **Bootstrap** — non-interactive: it fetches the secrets above via managed identity, generates
