@@ -1,5 +1,7 @@
 // vm.bicep — network + compute for one agent.
-// Posture: NO public IP unless sshAccessCidr is set (a bootstrap convenience).
+// Posture: NSG denies ALL inbound. SSH is opt-in and TEMPORARY only -
+// scripts/ssh-open.ps1 adds a scoped rule (your /32); ssh-close.ps1 removes it.
+// A public IP is created only if sshAccessCidr is set, to give that temp rule a target.
 // All app traffic (webchat) rides the Cloudflare Tunnel (outbound-only), so the
 // NSG denies ALL inbound by default; an explicit deny sits at 4096 so the posture
 // is visible, not implied by platform defaults.
@@ -18,7 +20,7 @@ param repoRef string
 param deployerObjectId string = ''
 
 var vmName = '${agentName}-vm'
-var useSsh = !empty(sshAccessCidr)
+var wantPublicIp = !empty(sshAccessCidr)
 
 // --- Castor-profile vault/identity/backup gate ---
 // Keel is unchanged. For Castor, port Castor's Terraform: a per-agent Key Vault,
@@ -46,21 +48,6 @@ var kvNameForCi = wantsVault ? kvName : ''
 var msiClientIdForCi = wantsVault ? uai!.properties.clientId : ''
 var ciFinal = replace(replace(replace(replace(replace(replace(replace(ciRaw, '__CF_TUNNEL_TOKEN__', cloudflareTunnelToken), '__AGENT_PROFILE__', agentProfile), '__ADMIN_USER__', adminUsername), '__REPO_URL__', repoUrl), '__REPO_REF__', repoRef), '__KEY_VAULT_NAME__', kvNameForCi), '__MSI_CLIENT_ID__', msiClientIdForCi)
 
-var sshAllowRule = [
-  {
-    name: 'allow-ssh-bootstrap'
-    properties: {
-      priority: 1000
-      direction: 'Inbound'
-      access: 'Allow'
-      protocol: 'Tcp'
-      sourceAddressPrefix: sshAccessCidr
-      sourcePortRange: '*'
-      destinationAddressPrefix: '*'
-      destinationPortRange: '22'
-    }
-  }
-]
 var denyAllRule = [
   {
     name: 'deny-all-inbound'
@@ -81,7 +68,7 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2023-11-01' = {
   name: '${agentName}-nsg'
   location: location
   properties: {
-    securityRules: concat(useSsh ? sshAllowRule : [], denyAllRule)
+    securityRules: denyAllRule
   }
 }
 
@@ -108,7 +95,7 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
   }
 }
 
-resource pip 'Microsoft.Network/publicIPAddresses@2023-11-01' = if (useSsh) {
+resource pip 'Microsoft.Network/publicIPAddresses@2023-11-01' = if (wantPublicIp) {
   name: '${agentName}-pip'
   location: location
   sku: {
@@ -131,7 +118,7 @@ resource nic 'Microsoft.Network/networkInterfaces@2023-11-01' = {
             id: vnet.properties.subnets[0].id
           }
           privateIPAllocationMethod: 'Dynamic'
-          publicIPAddress: useSsh ? { id: pip.id } : null
+          publicIPAddress: wantPublicIp ? { id: pip.id } : null
         }
       }
     ]
@@ -291,4 +278,4 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
 
 output privateIp string = nic.properties.ipConfigurations[0].properties.privateIPAddress
 output vmName string = vmName
-output sshHint string = useSsh ? 'ssh ${adminUsername}@<public-ip> (see portal / az)' : 'no public IP — SSH over the Cloudflare tunnel'
+output sshHint string = wantPublicIp ? 'public IP present; open temp SSH with scripts/ssh-open.ps1, then ssh ${adminUsername}@<public-ip>' : 'no public IP; tunnel-only, no SSH'
