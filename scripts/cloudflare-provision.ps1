@@ -14,8 +14,7 @@ param(
   [string] $Domain = "keel-pm.com",
   [ValidateSet("castor","keel","atlas")] [string] $AgentProfile = "keel",
   [int]    $WebchatPort = 8443,
-  [string] $SessionDuration = "24h",
-  [switch] $IncludeSshHostname
+  [string] $SessionDuration = "24h"
 )
 
 $ErrorActionPreference = "Stop"
@@ -74,7 +73,6 @@ if ($existing) {
 $token = (Invoke-CF GET "/accounts/$AccountId/cfd_tunnel/$tunnelId/token").result
 
 $ingress = @( @{ hostname = $fqdn; service = "http://localhost:$WebchatPort" } )
-if ($IncludeSshHostname) { $ingress += @{ hostname = "ssh-$fqdn"; service = "ssh://localhost:22" } }
 $ingress += @{ service = "http_status:404" }
 Invoke-CF PUT "/accounts/$AccountId/cfd_tunnel/$tunnelId/configurations" @{ config = @{ ingress = $ingress } } | Out-Null
 Write-Host "   ingress set: $fqdn -> http://localhost:$WebchatPort"
@@ -93,7 +91,6 @@ function Ensure-Cname {
   }
 }
 Ensure-Cname $fqdn
-if ($IncludeSshHostname) { Ensure-Cname "ssh-$fqdn" }
 
 function Ensure-AccessApp {
   param([string]$AppHost, [string]$AppName)
@@ -128,7 +125,6 @@ function Ensure-AccessApp {
   }
 }
 Ensure-AccessApp $fqdn $AgentName
-if ($IncludeSshHostname) { Ensure-AccessApp "ssh-$fqdn" "$AgentName-ssh" }
 
 Write-Host ""
 Write-Host "Cloudflare front door ready for $AgentName." -ForegroundColor Green
