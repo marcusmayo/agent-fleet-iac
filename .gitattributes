@@ -1,0 +1,5 @@
+# Keep shell scripts and shared-core files LF on every platform so the fleet-core
+# hash gate stays stable (a Windows checkout must not CRLF-ify a hashed file).
+*.sh                   text eol=lf
+core/*.js              text eol=lf
+core/manifest.sha256   text eol=lf
