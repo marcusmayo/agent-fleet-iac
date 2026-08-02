@@ -1,13 +1,14 @@
 # Agent Fleet — Bicep IaC + Walkthrough Runbook
 
-Stand up a **Castor-profile VM** and a **Keel-profile VM**, add a **second Castor VM through the
-frontend**, then **decommission it** — testing each for functionality. One converged image, one
-Bicep module, per-agent isolation, Cloudflare-Tunnel transport.
+Stand up a **Castor-profile VM** and a **Keel-profile VM**, add a second agent **through the
+frontend**, then **decommission it** — testing each for functionality. A **shared core** vendored
+into each agent, one Bicep module, per-agent isolation, Cloudflare-Tunnel transport.
 
 > **How to use this:** I authored *and* locally validated these templates (Bicep compiles with
 > zero diagnostics; shell + Node + cloud-init syntax-checked — see **Validation record** at the
 > bottom). I can't deploy to *your* Azure from my side, so the steps below are yours to run. Every
-> command is copy-paste, with the expected output and a ✅ check after it.
+> command is copy-paste, with the expected output and a ✅ check after it. Substitute your own agent
+> name for each `<...-name>` placeholder.
 
 ---
 
@@ -15,14 +16,46 @@ Bicep module, per-agent isolation, Cloudflare-Tunnel transport.
 
 | Agent | Profile | Role | Resource group |
 |---|---|---|---|
-| **heimdall** | `castor` | multi-interface assistant | `rg-heimdall` |
-| **helm** | `keel` | portfolio-management engine | `rg-helm` |
-| **cerberus** | `castor` | added **via the frontend**, then decommissioned | `rg-cerberus` |
+| `<castor-name>` | `castor` | multi-interface assistant | `rg-<castor-name>` |
+| `<keel-name>` | `keel` | portfolio-management engine | `rg-<keel-name>` |
+| `<extra-name>` | `castor` | added **via the frontend**, then decommissioned | `rg-<extra-name>` |
 
-**One architecture, not two:** `castor` and `helm`/`keel` are the *same* image and the *same* module —
-only the `agentProfile` parameter and the per-agent data differ. Each agent is its own resource
-group (a clean bulkhead: decommission = delete the group). No public IP by default; the webchat
-rides an outbound-only Cloudflare Tunnel.
+**One shared core, two distinct images.** Both profiles vendor the **same fleet-core modules** — a
+deterministic shared core (`agent-fleet-iac/core/`) that's byte-hash-verified at build time, so a
+drifted copy fails the build. But each profile is *its own image*: `castor` adds its intake / vision
+/ notification surface, `keel` its portfolio engine. Only the shared core is identical across
+profiles; the profile-specific code, the Dockerfile, and the `agentProfile` parameter differ. Each
+agent is its own resource group (a clean bulkhead: decommission = delete the group). No public IP by
+default; the webchat rides an outbound-only Cloudflare Tunnel.
+
+---
+
+## Shared core (fleet-core)
+
+`agent-fleet-iac/core/` is the single source for code shared across profiles — the model router
+(`model-routing.js`), the capability-registry reader (`capability.js`), the egress / Can't-Shouldn't
+gate (`gate/*.js`), plus audit, redaction, notify, health, and scan modules. Each agent repo
+**vendors** these (it never fetches at build), so it stays hermetically buildable. A SHA256 manifest
+carried in a `.fleet-core-version` stamp, plus an in-build `verify-core.sh` per destination,
+guarantee the vendored copy matches canonical — a drifted module fails the agent's build loud.
+
+Propagate a change deliberately:
+
+```bash
+# 1. edit a module in core/ (or core/gate/), refresh the affected manifest, commit + push:
+( cd core && sha256sum *.js ) > core/manifest.sha256
+( cd core/gate && sha256sum *.js ) > core/gate/manifest.sha256
+git add core/<changed> && git commit -m "core: <what>" && git push
+
+# 2. sync into each agent repo (from an agent-fleet-iac checkout):
+./core/sync-core.sh ~/castor                    scaffold/scripts scaffold/gate
+./core/sync-core.sh ~/keel-portfolio-management scripts          gate
+
+# 3. in each agent repo: commit the vendored files + .fleet-core-version, rebuild --no-cache.
+```
+
+A new agent Aegis spins up inherits whatever core was last synced into the agent-repo templates. See
+`core/README.md` for the full module list and the per-profile destinations.
 
 ---
 
@@ -36,6 +69,11 @@ rides an outbound-only Cloudflare Tunnel.
 
 ```
 agent-fleet-iac/
+├── core/                             # shared modules vendored into each agent (model-routing, capability, gate/…)
+│   ├── *.js   manifest.sha256        # scripts-dest modules + drift manifest
+│   ├── gate/*.js  gate/manifest.sha256
+│   ├── sync-core.sh   verify-core.sh
+│   └── README.md
 ├── bicep/
 │   ├── main.bicep                    # subscription-scoped: RG + VM module
 │   ├── modules/vm.bicep              # network + compute (no public IP unless SSH_CIDR set)
@@ -43,7 +81,7 @@ agent-fleet-iac/
 │   └── params/{castor,keel}.bicepparam
 ├── scripts/{deploy,decommission,smoke-test}.sh
 ├── aegis/aegis-provision.js          # the frontend "Add/Decommission" endpoint (stub)
-└── README.md                          # this runbook
+└── README.md                         # this runbook
 ```
 
 ---
@@ -64,20 +102,20 @@ export AZ_LOCATION="eastus2"
 export SSH_CIDR="$(curl -s https://api.ipify.org)/32"
 
 # Optional: reproducible pinned build. Point REPO_URL at your fork and REPO_REF at
-# the exact commit/branch/tag to build (e.g. the commit that adds your ADO lane).
-# Leave REPO_REF unset to build the default-branch HEAD.
+# the exact commit/branch/tag to build. Leave REPO_REF unset to build default-branch HEAD.
 export REPO_URL="https://github.com/marcusmayo/keel-portfolio-management.git"
 export REPO_REF=""   # e.g. a commit SHA, or "feature/ado-normalizer"
 ```
 
-**Cloudflare tunnel — once per agent** (repeat for heimdall, helm, cerberus). In the Zero Trust
+**Cloudflare tunnel — once per agent** (repeat per agent name you deploy). In the Zero Trust
 dashboard → **Networks → Tunnels → Create tunnel** (name it after the agent), then:
 
 1. Copy the **tunnel token** (a long `eyJ…` string) — you'll `export CF_TUNNEL_TOKEN=…` per agent.
-2. **Public hostname:** `heimdall.<yourdomain>` → service `http://localhost:8443` (the webchat).
+2. **Public hostname:** `<agent-name>.<yourdomain>` → service `http://localhost:8443` (the webchat).
 3. **Access → Applications → Add self-hosted app** for that hostname, policy = *your email only*
-   (this is the edge login in front of the app's own TOTP).
-4. *(Hardened path only)* add a second hostname `ssh-heimdall.<yourdomain>` → `ssh://localhost:22`
+   (this is the edge login in front of the app's own TOTP). To require a second factor, add an
+   **authenticator/MFA method** in the app's **MFA** settings.
+4. *(Hardened path only)* add a second hostname `ssh-<agent-name>.<yourdomain>` → `ssh://localhost:22`
    and an Access app, so you can bootstrap without any public IP.
 
 > ✅ **Check:** `az account show -o table` prints your subscription, and you have a tunnel token
@@ -85,20 +123,20 @@ dashboard → **Networks → Tunnels → Create tunnel** (name it after the agen
 
 ---
 
-## Part 1 — stand up **heimdall** (Castor profile)
+## Part 1 — stand up your **Castor-profile agent**
 
 ```bash
-export CF_TUNNEL_TOKEN="<heimdall tunnel token>"
-scripts/deploy.sh castor heimdall
+export CF_TUNNEL_TOKEN="<castor tunnel token>"
+scripts/deploy.sh castor <castor-name>
 ```
 
 Expected (trimmed):
 
 ```
->> Deploying agent 'heimdall' (profile: castor) to eastus2
+>> Deploying agent '<castor-name>' (profile: castor) to eastus2
 >> SSH bootstrap open from: 203.0.113.5/32 (public IP created)
 {
-  "rg": "rg-heimdall",
+  "rg": "rg-<castor-name>",
   "profile": "castor",
   "publicIp": true,
   "privateIp": "10.30.0.4"
@@ -106,7 +144,7 @@ Expected (trimmed):
 >> Provisioned. cloud-init is now building the image on the VM (~4-8 min).
 ```
 
-> ✅ **Check:** `az group show -n rg-heimdall -o table` shows `Succeeded`.
+> ✅ **Check:** `az group show -n rg-<castor-name> -o table` shows `Succeeded`.
 
 **Set the operator secrets in the agent's Key Vault** — Castor's bootstrap fetches these at
 runtime via managed identity, so they never touch the template or disk:
@@ -114,7 +152,7 @@ runtime via managed identity, so they never touch the template or disk:
 ```bash
 # Validated wrapper: prompts (no echo) and rejects a placeholder or wrong key
 # before it reaches the vault (model-api-key must be sk-or-*, vision-api-key sk-ant-*).
-bash scripts/set-secrets.sh rg-heimdall
+bash scripts/set-secrets.sh rg-<castor-name>
 ```
 
 **Bootstrap** — non-interactive: it fetches the secrets above via managed identity, generates
@@ -122,9 +160,9 @@ and prints a TOTP QR to enrol, seeds the egress config, and brings the stack up:
 
 ```bash
 # public-IP path:
-PUBIP=$(az vm list-ip-addresses -g rg-heimdall --query "[0].virtualMachine.network.publicIpAddresses[0].ipAddress" -o tsv)
+PUBIP=$(az vm list-ip-addresses -g rg-<castor-name> --query "[0].virtualMachine.network.publicIpAddresses[0].ipAddress" -o tsv)
 ssh -i ~/.ssh/agentfleet agentadmin@"$PUBIP"
-# --- OR hardened path (no public IP): cloudflared access ssh --hostname ssh-heimdall.<domain>
+# --- OR hardened path (no public IP): cloudflared access ssh --hostname ssh-<castor-name>.<domain>
 
 # on the VM:
 cd ~/agent
@@ -134,44 +172,46 @@ tail -n 5 -f /var/log/agent-image-build.log     # wait for "BUILT castor:<sha>",
 
 Expected tail of bootstrap: `publishing webchat on 127.0.0.1:8443` → smoke test → `bootstrap complete`.
 
-**Test heimdall:**
+**Test it:**
 
 ```bash
 # on the VM:
-~/agent/scripts/smoke-test.sh            # (or: /home/agentadmin/agent from this bundle's scripts)
+~/agent/scripts/smoke-test.sh
 ```
 
-Then from your **phone or laptop browser**: open `https://heimdall.<yourdomain>` → Cloudflare Access
-login → the webchat loads → enter your TOTP.
+Then from your **phone or laptop browser**: open `https://<castor-name>.<yourdomain>` → Cloudflare
+Access login → the webchat loads → enter your TOTP.
 
-> ✅ **Heimdall checklist:** RG `Succeeded` · image built · `bootstrap complete` · webchat reachable
+> ✅ **Checklist:** RG `Succeeded` · image built · `bootstrap complete` · webchat reachable
 > at its Cloudflare hostname · TOTP prompt appears · smoke test all PASS.
 
 ---
 
-## Part 2 — stand up **helm** (Keel profile)
+## Part 2 — stand up your **Keel-profile agent**
 
 Same flow, different profile and its own tunnel token:
 
 ```bash
-export CF_TUNNEL_TOKEN="<helm tunnel token>"
-scripts/deploy.sh keel helm
+export CF_TUNNEL_TOKEN="<keel tunnel token>"
+scripts/deploy.sh keel <keel-name>
 ```
 
-Expected: `"rg": "rg-helm", "profile": "keel"`. Bootstrap identically (public-IP or hardened), then
-open `https://helm.<yourdomain>`.
+Expected: `"rg": "rg-<keel-name>", "profile": "keel"`. Bootstrap identically (public-IP or hardened),
+then open `https://<keel-name>.<yourdomain>`.
 
-**What differs from heimdall:** same image, `agentProfile=keel` written to `.provision-flags`. The
-Keel profile is the portfolio engine — try a portfolio skill in the webchat (e.g. ask it to score an
-item with WSJF/RICE, or normalize a small backlog). The Castor profile is where you'd instead enable
-the Telegram/email interfaces and the drafting skill set.
+**What differs from the Castor agent:** the **shared core is identical**, but the image is the Keel
+build (`agentProfile=keel` written to `.provision-flags`, Keel's own Dockerfile and profile code).
+The Keel profile is the portfolio engine — try a portfolio skill in the webchat (e.g. ask it to
+score an item with WSJF/RICE, or normalize a small backlog). The Castor profile is where you'd
+instead enable the Telegram/email interfaces and the drafting skill set. Both profiles ship the same
+capability registry, so the same optional integrations are available to toggle on either.
 
-> ✅ **Helm checklist:** RG `Succeeded` · profile shows `keel` · webchat reachable · a
+> ✅ **Checklist:** RG `Succeeded` · profile shows `keel` · webchat reachable · a
 > portfolio/scoring skill responds · smoke test all PASS.
 
 ---
 
-## Part 3 — add **cerberus** (Castor) **through the frontend**
+## Part 3 — add a second **Castor** agent **through the frontend**
 
 The frontend "Add agent" button calls the Aegis provisioning endpoint (`aegis/aegis-provision.js`),
 which is a thin wrapper over the **same** `deploy.sh`. On the Aegis host (with the least-privilege
@@ -181,50 +221,50 @@ service principal logged in and per-agent secrets in the vault):
 # what the frontend button does under the hood:
 curl -X POST http://127.0.0.1:7070/agents \
   -H 'content-type: application/json' \
-  -d '{"name":"cerberus","profile":"castor"}'
-# -> { "status": "provisioning", "name": "cerberus", "profile": "castor", "log": "...rg-cerberus..." }
+  -d '{"name":"<extra-name>","profile":"castor"}'
+# -> { "status": "provisioning", "name": "<extra-name>", "profile": "castor", "log": "...rg-<extra-name>..." }
 ```
 
-Because the endpoint just shells out to `deploy.sh castor cerberus`, the CLI equivalent is identical
-(use this if you're testing before wiring the endpoint):
+Because the endpoint just shells out to `deploy.sh castor <extra-name>`, the CLI equivalent is
+identical (use this if you're testing before wiring the endpoint):
 
 ```bash
-export CF_TUNNEL_TOKEN="<cerberus tunnel token>"
-scripts/deploy.sh castor cerberus
+export CF_TUNNEL_TOKEN="<extra tunnel token>"
+scripts/deploy.sh castor <extra-name>
 ```
 
-Bootstrap + test exactly as in Part 1, at `https://cerberus.<yourdomain>`.
+Bootstrap + test exactly as in Part 1, at `https://<extra-name>.<yourdomain>`.
 
-> ✅ **Cerberus checklist:** provision call returns `provisioning` · `rg-cerberus` `Succeeded` ·
-> webchat reachable · smoke test all PASS · and note it did **not** touch heimdall or helm.
+> ✅ **Checklist:** provision call returns `provisioning` · `rg-<extra-name>` `Succeeded` ·
+> webchat reachable · smoke test all PASS · and note it did **not** touch your other agents.
 
 ---
 
-## Part 4 — decommission **cerberus**
+## Part 4 — decommission the added agent
 
 Frontend "Decommission" button → `DELETE`, which wraps `decommission.sh … --yes`:
 
 ```bash
-curl -X DELETE http://127.0.0.1:7070/agents/cerberus
-# -> { "status": "decommissioned", "name": "cerberus", "log": "...deleted..." }
+curl -X DELETE http://127.0.0.1:7070/agents/<extra-name>
+# -> { "status": "decommissioned", "name": "<extra-name>", "log": "...deleted..." }
 ```
 
 CLI equivalent (interactive confirm):
 
 ```bash
-scripts/decommission.sh cerberus        # type "cerberus" to confirm
+scripts/decommission.sh <extra-name>        # type "<extra-name>" to confirm
 ```
 
 **Verify it's gone:**
 
 ```bash
-az group show -n rg-cerberus -o table   # expect: (ResourceGroupNotFound)
+az group show -n rg-<extra-name> -o table   # expect: (ResourceGroupNotFound)
 ```
 
-Then the manual offboarding the script reminds you of: delete cerberus's **Cloudflare tunnel + Access
-app**, revoke its **model key**, and remove its **Aegis registry entry**.
+Then the manual offboarding the script reminds you of: delete the agent's **Cloudflare tunnel +
+Access app**, revoke its **model key**, and remove its **Aegis registry entry**.
 
-> ✅ **Decommission checklist:** `az group show` returns *NotFound* · heimdall + helm still reachable
+> ✅ **Checklist:** `az group show` returns *NotFound* · your other agents still reachable
 > (isolation held) · Cloudflare tunnel/key revoked.
 
 ---
@@ -234,13 +274,14 @@ app**, revoke its **model key**, and remove its **Aegis registry entry**.
 | Check | How | Pass = |
 |---|---|---|
 | Provisioned | `az group show -n rg-<name>` | `Succeeded` |
-| Image built | on VM: `grep -cE 'BUILT (keel|castor|atlas):' /var/log/agent-image-build.log` | ≥ 1 |
+| Image built | on VM: `grep -cE 'BUILT (keel\|castor\|atlas):' /var/log/agent-image-build.log` | ≥ 1 |
+| Shared core intact | on VM: `bash scripts/verify-core.sh scripts && bash gate/verify-core.sh gate` | both `verify-core OK` |
 | Container healthy | on VM: `curl -fsS http://127.0.0.1:8443/health/liveliness -o /dev/null && echo ok` | `ok` (HTTP 200) |
 | Webchat reachable | browser: `https://<name>.<domain>` (after Access) | page loads |
-| MFA enforced | webchat prompts for TOTP | prompt appears |
+| MFA enforced | webchat prompts for TOTP (or Access MFA) | prompt appears |
 | Redaction gate | on VM: `node gate/ask.js "email me at test@example.com"` then check `logs/audit.jsonl` | entity tokenized, audit entry appended |
 | State writable | on VM: `scripts/smoke-test.sh` | `state volume writable` PASS |
-| Isolation | after cerberus teardown, heimdall/helm still answer | both reachable |
+| Isolation | after teardown of the added agent, the others still answer | all reachable |
 
 `scripts/smoke-test.sh` bundles the HTTP + container + state checks; run it on each VM.
 
@@ -252,9 +293,9 @@ Each VM is a **Standard_D2s_v3** (~$70-90/mo if left on; far less for a short te
 fleet down when done:
 
 ```bash
-scripts/decommission.sh heimdall
-scripts/decommission.sh helm
-# (cerberus already gone)
+scripts/decommission.sh <castor-name>
+scripts/decommission.sh <keel-name>
+# (the added agent already gone)
 ```
 
 ---
@@ -267,6 +308,8 @@ scripts/decommission.sh helm
 - **Secrets:** the tunnel token is the only secret in `customData` and is scrubbed from cloud logs
   after install. Runtime secrets (TOTP, model key) are injected over SSH by `bootstrap.sh`, never in
   the template. Production upgrade: pull all three from **Key Vault** via managed identity.
+- **Shared-core integrity:** every agent's build fails loud if a vendored core module drifts from the
+  fleet-core manifest, so the egress gate and redaction logic can't silently diverge between agents.
 - **Frontend provisioning:** `aegis-provision.js` binds to loopback (reachable only through the
   tunnel), requires the Aegis operator session, validates `name`/`profile` against strict allow-lists
   (no shell injection), and authenticates to Azure with a **least-privilege service principal**
@@ -284,6 +327,7 @@ scripts/decommission.sh helm
 | `params/castor.bicepparam` | `bicep build-params` | OK |
 | `params/keel.bicepparam` | `bicep build-params` | OK |
 | `scripts/*.sh` | `bash -n` | all OK |
+| `core/sync-core.sh` + `core/verify-core.sh` | `bash -n` + round-trip vendor/verify | OK |
 | `aegis/aegis-provision.js` | `node --check` | OK |
 | `cloud-init/agent-cloudflared.yaml` | `yaml.safe_load` | OK |
 
