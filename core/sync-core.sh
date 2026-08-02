@@ -23,7 +23,7 @@ vendor() {
   [ -d "$DEST" ] || { echo "FATAL: dest not found: $DEST"; exit 1; }
   [ -f "$MANIFEST" ] || { echo "FATAL: no manifest: $MANIFEST"; exit 1; }
   echo "Syncing fleet-core ($CORE_REF) -> $DEST"
-  for f in "$SRCDIR"/*.js "$HERE"/verify-core.sh; do
+  for f in "$SRCDIR"/*.js "$SRCDIR"/*.yaml "$HERE"/verify-core.sh; do
     [ -e "$f" ] || continue
     cp "$f" "$DEST/$(basename "$f")"
     echo "  vendored: $(basename "$f")"
