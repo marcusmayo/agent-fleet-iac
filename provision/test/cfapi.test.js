@@ -40,3 +40,15 @@ test('list policies: GET on the app', () => {
   assert.strictEqual(r.method, 'GET');
   assert.strictEqual(r.url, `${cf.CF_API}/accounts/${ACCT}/access/apps/${APP}/policies`);
 });
+
+test('list service tokens: GET accounts/{acct}/access/service_tokens', () => {
+  const r = cf.reqListServiceTokens(ACCT);
+  assert.strictEqual(r.method, 'GET');
+  assert.strictEqual(r.url, `${cf.CF_API}/accounts/${ACCT}/access/service_tokens`);
+});
+
+test('delete service token: DELETE by id', () => {
+  const r = cf.reqDeleteServiceToken(ACCT, 'tok-1');
+  assert.strictEqual(r.method, 'DELETE');
+  assert.strictEqual(r.url, `${cf.CF_API}/accounts/${ACCT}/access/service_tokens/tok-1`);
+});

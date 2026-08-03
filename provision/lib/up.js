@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { c, findFleetRoot, which } = require('./util');
+const { c, findFleetRoot, which, resolveBash } = require('./util');
 const { loadContract } = require('./contract');
 const { derive } = require('./derive');
 const pf = require('./preflight');
@@ -33,7 +33,7 @@ function gather(v, opts) {
     d, fleetRoot, configPath, giState: gi.state,
     pubkey: sk.pubkey,
     pwsh: resolvePwsh(),
-    bash: which('bash'),
+    bash: resolveBash(),
     az: which('az'),
     cfToken: process.env.CF_API_TOKEN || '',
     accountId: process.env.CF_ACCOUNT_ID || '',
@@ -156,8 +156,14 @@ async function runUp(file, opts = {}) {
     try { tunnelToken = fs.readFileSync(tokenFile, 'utf8').trim(); } catch { /* handled below */ }
     if (!tunnelToken) { console.log(c.red(`\nStep 1: tunnel token not written to ${tokenFile}. Is -TokenOutFile supported by the script?`)); return 1; }
 
-    // 2. Service token
+    // 2. Service token — delete a stale same-name token first so retries stay clean
+    //    (its secret can't be re-fetched, so we recreate to get a usable one).
     step(2, `Service token aegis-${v.name} (Cloudflare API)`);
+    const stale = await cf.findServiceTokenByName(R.accountId, `aegis-${v.name}`, R.cfToken);
+    if (stale) {
+      console.log(c.dim(`  removing stale token aegis-${v.name} (${stale.id}) so the new secret is usable`));
+      await cf.deleteServiceToken(R.accountId, stale.id, R.cfToken);
+    }
     const token = await cf.createServiceToken(R.accountId, `aegis-${v.name}`, R.cfToken);
     console.log(c.green(`  created — clientId ${token.clientId}  (secret held in-memory)`));
 

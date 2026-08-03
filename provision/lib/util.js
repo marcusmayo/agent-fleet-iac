@@ -44,6 +44,33 @@ function which(bin) {
   return probe.stdout.trim().split(/\r?\n/)[0].trim();
 }
 
+// Resolve a usable bash. On Windows, `where bash` usually returns the WSL launcher
+// (C:\Windows\System32\bash.exe), which fails when no WSL distro is installed —
+// prefer Git-for-Windows bash instead.
+function resolveBash() {
+  if (process.platform !== 'win32') return which('bash');
+  const lines = (arg) => {
+    const r = spawnSync('where', [arg], { encoding: 'utf8' });
+    return (r.status === 0 && r.stdout)
+      ? r.stdout.trim().split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+      : [];
+  };
+  const bashes = lines('bash')
+    .filter((s) => !/\\System32\\bash\.exe$/i.test(s) && !/\\WindowsApps\\/i.test(s));
+  const gitBash = bashes.find((s) => /\\git\\/i.test(s));
+  if (gitBash) return gitBash;
+  if (bashes.length) return bashes[0];
+  // derive from `where git`:  <git-root>\{cmd|bin}\git.exe  ->  <git-root>\bin\bash.exe
+  for (const gitExe of lines('git')) {
+    const m = gitExe.match(/^(.*)\\(?:cmd|bin|mingw64\\bin)\\git\.exe$/i);
+    if (m) {
+      const cand = path.join(m[1], 'bin', 'bash.exe');
+      if (fs.existsSync(cand)) return cand;
+    }
+  }
+  return null;
+}
+
 // Locate the fleet repo root: the dir holding bicep/main.bicep AND scripts/deploy.sh.
 // Order: $FLEET_DIR, then ascend from cwd, then the CLI's own location (…/provision).
 function findFleetRoot() {
@@ -69,4 +96,4 @@ function findFleetRoot() {
   return null;
 }
 
-module.exports = { c, runCapture, which, findFleetRoot };
+module.exports = { c, runCapture, which, resolveBash, findFleetRoot };

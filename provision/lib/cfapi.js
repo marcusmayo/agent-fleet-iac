@@ -13,6 +13,12 @@ const CF_API = 'https://api.cloudflare.com/client/v4';
 function reqCreateServiceToken(accountId, name) {
   return { method: 'POST', url: `${CF_API}/accounts/${accountId}/access/service_tokens`, body: { name } };
 }
+function reqListServiceTokens(accountId) {
+  return { method: 'GET', url: `${CF_API}/accounts/${accountId}/access/service_tokens` };
+}
+function reqDeleteServiceToken(accountId, id) {
+  return { method: 'DELETE', url: `${CF_API}/accounts/${accountId}/access/service_tokens/${id}` };
+}
 function reqListApps(accountId) {
   return { method: 'GET', url: `${CF_API}/accounts/${accountId}/access/apps` };
 }
@@ -54,6 +60,15 @@ async function createServiceToken(accountId, name, apiToken) {
   return { id: r.id, clientId: r.client_id, clientSecret: r.client_secret };
 }
 
+async function findServiceTokenByName(accountId, name, apiToken) {
+  const toks = await cfExec(reqListServiceTokens(accountId), apiToken);
+  return (toks || []).find((t) => t.name === name) || null;
+}
+
+async function deleteServiceToken(accountId, id, apiToken) {
+  await cfExec(reqDeleteServiceToken(accountId, id), apiToken);
+}
+
 async function findAppByHostname(accountId, hostname, apiToken) {
   const apps = await cfExec(reqListApps(accountId), apiToken);
   return (apps || []).find((a) => a.domain === hostname) || null;
@@ -69,6 +84,8 @@ async function upsertServiceAuthPolicy(accountId, appId, policyName, tokenId, ap
 
 module.exports = {
   CF_API,
-  reqCreateServiceToken, reqListApps, reqListPolicies, reqServiceAuthPolicy,
-  cfExec, createServiceToken, findAppByHostname, upsertServiceAuthPolicy,
+  reqCreateServiceToken, reqListServiceTokens, reqDeleteServiceToken,
+  reqListApps, reqListPolicies, reqServiceAuthPolicy,
+  cfExec, createServiceToken, findServiceTokenByName, deleteServiceToken,
+  findAppByHostname, upsertServiceAuthPolicy,
 };
