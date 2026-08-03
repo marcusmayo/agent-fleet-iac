@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { c, findFleetRoot, which, resolveBash } = require('./util');
+const { c, findFleetRoot, which, resolveBash, runCapture } = require('./util');
 const { loadContract } = require('./contract');
 const { derive } = require('./derive');
 const pf = require('./preflight');
@@ -153,6 +153,21 @@ async function runUp(file, opts = {}) {
   if (R.giState === 'not-ignored') {
     console.log(c.red(`\nup --go ABORT — aegis.config.json is not gitignored; refusing to write a secret to a trackable file.`));
     return 1;
+  }
+
+  // Rebuild guard: a VM's cloud-init (osProfile.customData) is IMMUTABLE after
+  // creation, so deploying changed cloud-init onto an existing VM fails with
+  // PropertyChangeNotAllowed. If the agent's RG already exists, stop before
+  // touching anything and say so. --update overrides for intentional in-place
+  // updates that don't change customData.
+  const rgProbe = runCapture('az', ['group', 'exists', '-n', R.d.azure.resourceGroup]);
+  if (rgProbe.ok && rgProbe.stdout.trim() === 'true' && !opts.update) {
+    console.log(c.red(`\nup --go ABORT (nothing created) — resource group ${R.d.azure.resourceGroup} already exists.`));
+    console.log(`  A VM's cloud-init (customData) is immutable, so a redeploy with changed cloud-init fails.`);
+    console.log(`  For a rebuild:   bash scripts/decommission.sh ${v.name} --yes     (wait for ">> Azure resources deleted.")`);
+    console.log(`  then verify:     az group exists -n ${R.d.azure.resourceGroup}      (must print: false)`);
+    console.log(`  and re-run. For an intentional in-place update that does not change cloud-init: add --update.`);
+    return 2;
   }
 
   const psScript = path.join(R.fleetRoot, 'scripts', 'cloudflare-provision.ps1');

@@ -35,6 +35,9 @@ Commands:
                    token + Service Auth policy (CF API) -> register -> deploy.sh (VM).
                    Needs \$CF_API_TOKEN, \$CF_ACCOUNT_ID, \$CF_OPERATOR_EMAIL, an SSH key,
                    and pwsh + bash + az. Fails fast; the secret is never printed.
+                   Aborts if rg-<name> already exists (cloud-init is immutable on a
+                   live VM) — decommission first for a rebuild, or pass --update for
+                   an intentional in-place update that does not change cloud-init.
 
   register  Add/update the agent's entry in aegis.config.json (idempotent per name;
             refuses if that file is not gitignored). Service-token credentials come
@@ -91,7 +94,7 @@ async function main(argv) {
   }
   if (cmd === 'up') {
     if (!file) { console.error(c.red('up: missing <contract.agent.jsonc>')); return 2; }
-    return runUp(file, { go: flags.has('--go'), aegisConfig });
+    return runUp(file, { go: flags.has('--go'), update: flags.has('--update'), aegisConfig });
   }
 
   console.error(c.red(`unknown command "${cmd}"`) + '\n');
