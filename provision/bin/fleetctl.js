@@ -2,44 +2,83 @@
 'use strict';
 const { runCheck } = require('../lib/check');
 const { runPlan } = require('../lib/plan');
+const { runRegister } = require('../lib/register');
+const { runCheckLive } = require('../lib/live');
 const { c } = require('../lib/util');
 
-const HELP = `fleetctl — agent-fleet provisioning (Phase 1: read-only)
+const HELP = `fleetctl — agent-fleet provisioning
 
 Usage:
-  fleetctl check <contract.agent.jsonc> [--contract-only]
-  fleetctl plan  <contract.agent.jsonc> [--require-whatif]
+  fleetctl check    <contract.agent.jsonc> [--contract-only] [--live] [--aegis-config <path>]
+  fleetctl plan     <contract.agent.jsonc> [--require-whatif]
+  fleetctl register <contract.agent.jsonc> [--aegis-config <path>]
   fleetctl --help
 
 Commands:
-  check   Validate the per-agent contract, then preflight the environment
-          (az login, CF_API_TOKEN, SSH key, bicepparam, deployer id for castor).
-          --contract-only   validate the file only; skip environment preflight.
+  check     Validate the contract, then preflight the environment (az login,
+            CF_API_TOKEN, SSH key, bicepparam, deployer id for castor).
+            --contract-only   validate the file only; skip environment preflight.
+            --live            skip env preflight; instead probe the deployed agent's
+                              /health/liveliness through the tunnel (HTTP 200) using
+                              the service token stored in aegis.config.json.
+            --require-live    exit non-zero if the live probe can't run (for CI).
 
-  plan    Validate the contract and preview every Azure + Cloudflare + register
-          resource it will create, then run \`az deployment sub what-if\` (read-only).
-          --require-whatif  exit non-zero if the what-if cannot be run (for CI).
+  plan      Validate the contract and preview every Azure + Cloudflare + register
+            resource it will create, then run \`az deployment sub what-if\` (read-only).
+            --require-whatif  exit non-zero if the what-if cannot be run (for CI).
 
-Neither command changes anything. Contracts live in agents/<name>.agent.jsonc.`;
+  register  Add/update the agent's entry in aegis.config.json (idempotent per name;
+            refuses if that file is not gitignored). Service-token credentials come
+            from \$AEGIS_CLIENT_ID + \$AEGIS_CLIENT_SECRET (or from \`up\`, in-process) —
+            never from CLI flags. The secret is written to the config, never printed.
 
-function main(argv) {
+  --aegis-config <path>   Path to aegis.config.json (else \$AEGIS_CONFIG, \$AEGIS_DIR,
+                          or <fleet-parent>/aegis/aegis.config.json).
+
+check/plan make no changes. register writes only to the local (gitignored) config.`;
+
+const VALUED = new Set(['--aegis-config']);
+
+function parseArgs(rest) {
+  const flags = new Set();
+  const opts = {};
+  const positional = [];
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      if (eq >= 0) opts[a.slice(2, eq)] = a.slice(eq + 1);
+      else if (VALUED.has(a)) opts[a.slice(2)] = rest[++i];
+      else flags.add(a);
+    } else {
+      positional.push(a);
+    }
+  }
+  return { flags, opts, file: positional[0] };
+}
+
+async function main(argv) {
   const args = argv.slice(2);
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
     console.log(HELP);
     return 0;
   }
   const cmd = args[0];
-  const rest = args.slice(1);
-  const flags = new Set(rest.filter((a) => a.startsWith('--')));
-  const file = rest.find((a) => !a.startsWith('--'));
+  const { flags, opts, file } = parseArgs(args.slice(1));
+  const aegisConfig = opts['aegis-config'];
 
   if (cmd === 'check') {
     if (!file) { console.error(c.red('check: missing <contract.agent.jsonc>')); return 2; }
+    if (flags.has('--live')) return runCheckLive(file, { aegisConfig, requireLive: flags.has('--require-live') });
     return runCheck(file, { contractOnly: flags.has('--contract-only') });
   }
   if (cmd === 'plan') {
     if (!file) { console.error(c.red('plan: missing <contract.agent.jsonc>')); return 2; }
     return runPlan(file, { requireWhatif: flags.has('--require-whatif') });
+  }
+  if (cmd === 'register') {
+    if (!file) { console.error(c.red('register: missing <contract.agent.jsonc>')); return 2; }
+    return runRegister(file, { aegisConfig });
   }
 
   console.error(c.red(`unknown command "${cmd}"`) + '\n');
@@ -47,4 +86,7 @@ function main(argv) {
   return 2;
 }
 
-process.exit(main(process.argv));
+Promise.resolve(main(process.argv)).then((code) => process.exit(code)).catch((e) => {
+  console.error(c.red('fatal: ' + (e && e.message ? e.message : e)));
+  process.exit(1);
+});
