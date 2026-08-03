@@ -1,5 +1,6 @@
 <#
 ssh-close.ps1 - remove the temporary SSH rule, returning the agent to ZERO INBOUND. Idempotent.
+Works under Windows PowerShell 5.1 and pwsh 7 (native stderr is probed EAP-safely).
 #>
 [CmdletBinding()]
 param(
@@ -10,8 +11,11 @@ $rg   = "rg-$AgentName"
 $nsg  = "$AgentName-nsg"
 $rule = "allow-ssh-bootstrap"
 
-$exists = az network nsg rule show -g $rg --nsg-name $nsg -n $rule --query "name" -o tsv 2>$null
-if (-not $exists) {
+$prev = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try   { $exists = az network nsg rule show -g $rg --nsg-name $nsg -n $rule --query "name" -o tsv 2>$null }
+finally { $ErrorActionPreference = $prev }
+if ($LASTEXITCODE -ne 0 -or -not $exists) {
   Write-Host "No '$rule' rule on $AgentName - already closed (zero inbound)." -ForegroundColor Green
   return
 }
