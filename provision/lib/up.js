@@ -191,6 +191,16 @@ async function runUp(file, opts = {}) {
     console.log(c.green(`\nup --go OK — ${v.name} provisioned. cloud-init is building the image (~4-8 min).`));
     console.log(c.dim('Next: ssh-open.ps1 + bootstrap.sh for runtime secrets, then  fleetctl check ' + file + ' --live'));
     return 0;
+  } catch (e) {
+    const msg = (e && e.message) ? e.message : String(e);
+    console.log(c.red('\nup --go FAILED: ' + msg));
+    if (/\b10000\b|authentication|authoriz|forbidden|permission|\b9109\b/i.test(msg)) {
+      console.log(c.yellow('  Looks like a Cloudflare API permission problem. The token minting the service'));
+      console.log(c.yellow('  token needs "Access: Service Tokens · Edit" (on top of Access Apps & Policies,'));
+      console.log(c.yellow('  DNS, and Cloudflare Tunnel). Add it to $CF_API_TOKEN, then re-run.'));
+    }
+    console.log(c.dim('  The Cloudflare front door may already exist (cloudflare-provision.ps1 is idempotent) — re-running is safe.'));
+    return 1;
   } finally {
     try { fs.unlinkSync(tokenFile); } catch { /* best effort */ }
   }

@@ -16,12 +16,14 @@ const c = {
 
 // Run a command capturing output; never throws. `notFound` => binary missing.
 function runCapture(cmd, args, opts = {}) {
-  // On Windows, tools like `az` are .cmd shims and modern Node refuses to spawn a
-  // .cmd/.bat directly (throws EINVAL), so run through a shell there. Our commands
-  // and args are hardcoded/regex-constrained (no shell metacharacters), so this is
-  // safe. On POSIX, shell stays off.
-  const shell = process.platform === 'win32';
-  const r = spawnSync(cmd, args, { encoding: 'utf8', shell, ...opts });
+  // Only shell out for Windows .cmd/.bat shims (az, npm, …) which Node can't spawn
+  // directly (EINVAL). Real executables (git, where, sh, node) run without a shell —
+  // which also avoids the shell-args deprecation warning. Args here are hardcoded/
+  // regex-constrained (no shell metacharacters).
+  const cmdShim = process.platform === 'win32' && /^(az|npm|npx|yarn|pnpm)$/i.test(cmd);
+  const { shell: shellOverride, ...rest } = opts;
+  const shell = shellOverride !== undefined ? shellOverride : cmdShim;
+  const r = spawnSync(cmd, args, { encoding: 'utf8', shell, ...rest });
   return {
     ok: !r.error && r.status === 0,
     status: r.status,
