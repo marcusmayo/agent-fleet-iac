@@ -156,16 +156,20 @@ async function runUp(file, opts = {}) {
     try { tunnelToken = fs.readFileSync(tokenFile, 'utf8').trim(); } catch { /* handled below */ }
     if (!tunnelToken) { console.log(c.red(`\nStep 1: tunnel token not written to ${tokenFile}. Is -TokenOutFile supported by the script?`)); return 1; }
 
-    // 2. Service token — delete a stale same-name token first so retries stay clean
-    //    (its secret can't be re-fetched, so we recreate to get a usable one).
+    // 2. Service token — idempotent: an existing same-name token is ROTATED (new
+    //    secret, same token id) so any policy referencing it stays valid; delete
+    //    would be refused with 12139 service_token_in_use once a policy exists.
     step(2, `Service token aegis-${v.name} (Cloudflare API)`);
-    const stale = await cf.findServiceTokenByName(R.accountId, `aegis-${v.name}`, R.cfToken);
-    if (stale) {
-      console.log(c.dim(`  removing stale token aegis-${v.name} (${stale.id}) so the new secret is usable`));
-      await cf.deleteServiceToken(R.accountId, stale.id, R.cfToken);
+    const existing = await cf.findServiceTokenByName(R.accountId, `aegis-${v.name}`, R.cfToken);
+    let token;
+    if (existing) {
+      console.log(c.dim(`  token exists (${existing.id}) — rotating for a fresh usable secret (policy references stay valid)`));
+      token = await cf.rotateServiceToken(R.accountId, existing.id, R.cfToken);
+      console.log(c.green(`  rotated — clientId ${token.clientId}  (secret held in-memory)`));
+    } else {
+      token = await cf.createServiceToken(R.accountId, `aegis-${v.name}`, R.cfToken);
+      console.log(c.green(`  created — clientId ${token.clientId}  (secret held in-memory)`));
     }
-    const token = await cf.createServiceToken(R.accountId, `aegis-${v.name}`, R.cfToken);
-    console.log(c.green(`  created — clientId ${token.clientId}  (secret held in-memory)`));
 
     // 3. Service Auth policy
     step(3, 'Service Auth policy on the agent app (Cloudflare API)');

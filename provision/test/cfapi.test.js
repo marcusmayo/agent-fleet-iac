@@ -52,3 +52,9 @@ test('delete service token: DELETE by id', () => {
   assert.strictEqual(r.method, 'DELETE');
   assert.strictEqual(r.url, `${cf.CF_API}/accounts/${ACCT}/access/service_tokens/tok-1`);
 });
+
+test('rotate service token: POST .../{id}/rotate', () => {
+  const r = cf.reqRotateServiceToken(ACCT, 'tok-1');
+  assert.strictEqual(r.method, 'POST');
+  assert.strictEqual(r.url, `${cf.CF_API}/accounts/${ACCT}/access/service_tokens/tok-1/rotate`);
+});
