@@ -46,7 +46,7 @@ var roleStorageBlobContributor = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 var ciRaw = loadTextContent('../cloud-init/agent-cloudflared.yaml')
 var kvNameForCi = wantsVault ? kvName : ''
 var msiClientIdForCi = wantsVault ? uai!.properties.clientId : ''
-var ciFinal = replace(replace(replace(replace(replace(replace(replace(ciRaw, '__CF_TUNNEL_TOKEN__', cloudflareTunnelToken), '__AGENT_PROFILE__', agentProfile), '__ADMIN_USER__', adminUsername), '__REPO_URL__', repoUrl), '__REPO_REF__', repoRef), '__KEY_VAULT_NAME__', kvNameForCi), '__MSI_CLIENT_ID__', msiClientIdForCi)
+var ciFinal = replace(replace(replace(replace(replace(replace(replace(replace(ciRaw, '__CF_TUNNEL_TOKEN__', cloudflareTunnelToken), '__AGENT_PROFILE__', agentProfile), '__ADMIN_USER__', adminUsername), '__REPO_URL__', repoUrl), '__REPO_REF__', repoRef), '__KEY_VAULT_NAME__', kvNameForCi), '__MSI_CLIENT_ID__', msiClientIdForCi), '__AGENT_NAME__', agentName)
 
 var denyAllRule = [
   {

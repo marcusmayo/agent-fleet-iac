@@ -25,6 +25,11 @@ runcmd:
   # scaffold/. Detect and use the right dir (safe no-op for keel — no scaffold/).
   - 'if [ -d "/home/__ADMIN_USER__/agent/scaffold" ]; then AGENT_DIR="/home/__ADMIN_USER__/agent/scaffold"; else AGENT_DIR="/home/__ADMIN_USER__/agent"; fi; echo "agent dir: $AGENT_DIR"'
   - printf 'AGENT_PROFILE=%s\nKEY_VAULT_NAME=%s\nMSI_CLIENT_ID=%s\n' '__AGENT_PROFILE__' '__KEY_VAULT_NAME__' '__MSI_CLIENT_ID__' > "$AGENT_DIR/.provision-flags"
+  # Brand this agent with its deploy-time name. The shared webchat reads agent_name
+  # from system/agent.yaml; overwrite the repo default with __AGENT_NAME__, then
+  # verify loudly (fail the build rather than ship a mis-branded agent).
+  - 'sed -i "s/^agent_name:.*/agent_name: \"__AGENT_NAME__\"/" "$AGENT_DIR/system/agent.yaml"'
+  - 'grep -qx "agent_name: \"__AGENT_NAME__\"" "$AGENT_DIR/system/agent.yaml" || { echo "ABORT: agent_name not branded to __AGENT_NAME__" | tee -a /var/log/agent-image-build.log; exit 1; }'
   # chown BEFORE the build so the tree is admin-owned even if the build fails, and
   # invoke the builder via bash so a missing +x bit on build-image.sh cannot
   # Permission-deny and abort the whole runcmd (set -e). build-image.sh writes no
