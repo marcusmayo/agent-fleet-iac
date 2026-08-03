@@ -80,6 +80,22 @@ function printPlan(v, R) {
   console.log(c.dim(`     fleetctl check agents/${v.name}.agent.jsonc --live                    (expect HTTP 200)`));
 }
 
+// Deterministic deploy env. The contract has already resolved every value
+// (including the per-profile repo default), so pass them all EXPLICITLY.
+// Never pass a meaningful key as '' — readEnvironmentVariable() in the
+// bicepparams treats a present-but-empty env var as a value and skips its
+// default (that produced `git clone ''` in cloud-init). Exported for tests.
+function deployEnv(v, pubkey, tunnelToken) {
+  return {
+    CF_TUNNEL_TOKEN: tunnelToken,
+    SSH_PUBKEY: pubkey,
+    SSH_CIDR: v.sshCidr || '',
+    AZ_LOCATION: v.region,
+    REPO_URL: v.repoUrl,          // always the resolved value — never ''
+    REPO_REF: v.repoRef || '',    // '' equals the bicepparam default (HEAD)
+  };
+}
+
 // Run a script inheriting stdio so the operator sees progress. Spawns the resolved
 // executable path directly (no shell) — avoids the shell-args deprecation warning and
 // handles exe paths with spaces. Returns true on success.
@@ -187,19 +203,13 @@ async function runUp(file, opts = {}) {
     step(5, `Deploy the VM (BILLABLE) — ${R.d.azure.resourceGroup} / ${R.d.azure.vmName}`);
     const ok5 = runScript(R.bash, ['scripts/deploy.sh', v.profile, v.name], {
       cwd: R.fleetRoot,
-      env: {
-        CF_TUNNEL_TOKEN: tunnelToken,
-        SSH_PUBKEY: R.pubkey,
-        SSH_CIDR: v.sshCidr || '',
-        AZ_LOCATION: v.region,
-        REPO_URL: v.repoUrlIsDefault ? '' : v.repoUrl,
-        REPO_REF: v.repoRef || '',
-      },
+      env: deployEnv(v, R.pubkey, tunnelToken),
     });
     if (!ok5) { console.log(c.red('\nStep 5 failed (deploy.sh). CF + token + registration are done; re-run deploy.sh, or decommission to clean up.')); return 1; }
 
     console.log(c.green(`\nup --go OK — ${v.name} provisioned. cloud-init is building the image (~4-8 min).`));
     console.log(c.dim('Next: ssh-open.ps1 + bootstrap.sh for runtime secrets, then  fleetctl check ' + file + ' --live'));
+    console.log(c.dim('Aegis reads aegis.config.json at startup — restart it (node aegis.js) to show the new agent.'));
     return 0;
   } catch (e) {
     const msg = (e && e.message) ? e.message : String(e);
@@ -216,4 +226,4 @@ async function runUp(file, opts = {}) {
   }
 }
 
-module.exports = { runUp };
+module.exports = { runUp, deployEnv };

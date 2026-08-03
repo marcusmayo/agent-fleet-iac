@@ -15,6 +15,7 @@ param sshPublicKey string
 param sshAccessCidr string
 @secure()
 param cloudflareTunnelToken string
+@minLength(1)
 param repoUrl string
 param repoRef string
 param deployerObjectId string = ''
