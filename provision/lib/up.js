@@ -164,7 +164,7 @@ async function runUp(file, opts = {}) {
   if (rgProbe.ok && rgProbe.stdout.trim() === 'true' && !opts.update) {
     console.log(c.red(`\nup --go ABORT (nothing created) — resource group ${R.d.azure.resourceGroup} already exists.`));
     console.log(`  A VM's cloud-init (customData) is immutable, so a redeploy with changed cloud-init fails.`);
-    console.log(`  For a rebuild:   bash scripts/decommission.sh ${v.name} --yes     (wait for ">> Azure resources deleted.")`);
+    console.log(`  For a rebuild:   az group delete --name ${R.d.azure.resourceGroup} --yes     (blocks until deleted)`);
     console.log(`  then verify:     az group exists -n ${R.d.azure.resourceGroup}      (must print: false)`);
     console.log(`  and re-run. For an intentional in-place update that does not change cloud-init: add --update.`);
     return 2;
