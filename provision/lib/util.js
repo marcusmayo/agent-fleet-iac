@@ -16,7 +16,12 @@ const c = {
 
 // Run a command capturing output; never throws. `notFound` => binary missing.
 function runCapture(cmd, args, opts = {}) {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', ...opts });
+  // On Windows, tools like `az` are .cmd shims and modern Node refuses to spawn a
+  // .cmd/.bat directly (throws EINVAL), so run through a shell there. Our commands
+  // and args are hardcoded/regex-constrained (no shell metacharacters), so this is
+  // safe. On POSIX, shell stays off.
+  const shell = process.platform === 'win32';
+  const r = spawnSync(cmd, args, { encoding: 'utf8', shell, ...opts });
   return {
     ok: !r.error && r.status === 0,
     status: r.status,
