@@ -11,7 +11,17 @@ const cf = require('./cfapi');
 const cfg = require('./aegisconfig');
 const { runRegister } = require('./register');
 
-const SET = (x) => (x ? c.green('set') : c.red('MISSING'));
+const bad = (s) => !s || /[<>]/.test(s);                  // empty, or still a <placeholder>
+const SET = (x) => (x ? (/[<>]/.test(x) ? c.red('placeholder <…>') : c.green('set')) : c.red('MISSING'));
+
+// Resolve a PowerShell that actually launches. On Windows, prefer real Windows
+// PowerShell over the pwsh App-Execution-Alias stub in WindowsApps (which `where`
+// finds but which fails with "cannot find the file specified" when PS7 isn't installed).
+function resolvePwsh() {
+  return process.platform === 'win32'
+    ? (which('powershell') || which('pwsh'))
+    : (which('pwsh') || which('powershell'));
+}
 
 function gather(v, opts) {
   const d = derive(v);
@@ -22,7 +32,7 @@ function gather(v, opts) {
   return {
     d, fleetRoot, configPath, giState: gi.state,
     pubkey: sk.pubkey,
-    pwsh: which('pwsh') || which('powershell'),
+    pwsh: resolvePwsh(),
     bash: which('bash'),
     az: which('az'),
     cfToken: process.env.CF_API_TOKEN || '',
@@ -39,7 +49,7 @@ function printPlan(v, R) {
   console.log(c.bold('0. preflight'));
   console.log(`     CF_API_TOKEN        ${SET(R.cfToken)}`);
   console.log(`     CF_ACCOUNT_ID       ${SET(R.accountId)}`);
-  console.log(`     CF_OPERATOR_EMAIL   ${R.operatorEmail ? R.operatorEmail : c.red('MISSING')}`);
+  console.log(`     CF_OPERATOR_EMAIL   ${R.operatorEmail ? (/[<>]/.test(R.operatorEmail) ? c.red(R.operatorEmail + '  (placeholder)') : R.operatorEmail) : c.red('MISSING')}`);
   console.log(`     SSH public key      ${R.pubkey ? c.green('resolved') : c.red('MISSING (set $SSH_PUBKEY or $AF_SSH_PUBKEY_FILE)')}`);
   console.log(`     pwsh / bash / az    ${R.pwsh ? c.green('pwsh') : c.red('no pwsh')} / ${R.bash ? c.green('bash') : c.red('no bash')} / ${R.az ? c.green('az') : c.red('no az')}`);
   console.log(`     aegis.config.json   ${R.configPath || c.red('unresolved')} ${R.configPath ? c.dim('(' + R.giState + ')') : ''}`);
@@ -70,13 +80,15 @@ function printPlan(v, R) {
   console.log(c.dim(`     fleetctl check agents/${v.name}.agent.jsonc --live                    (expect HTTP 200)`));
 }
 
-// Run a script inheriting stdio so the operator sees progress; returns true on success.
-function runScript(cmd, args, extraEnv) {
-  console.log(c.dim(`\n$ ${cmd} ${args.join(' ')}`));
-  const r = spawnSync(cmd, args, {
+// Run a script inheriting stdio so the operator sees progress. Spawns the resolved
+// executable path directly (no shell) — avoids the shell-args deprecation warning and
+// handles exe paths with spaces. Returns true on success.
+function runScript(exe, args, opts = {}) {
+  console.log(c.dim(`\n$ ${exe} ${args.join(' ')}`));
+  const r = spawnSync(exe, args, {
     stdio: 'inherit',
-    shell: process.platform === 'win32',
-    env: { ...process.env, ...(extraEnv || {}) },
+    cwd: opts.cwd,
+    env: { ...process.env, ...(opts.env || {}) },
   });
   return !r.error && r.status === 0;
 }
@@ -109,6 +121,15 @@ async function runUp(file, opts = {}) {
   if (!R.az) missing.push('az');
   if (!R.fleetRoot) missing.push('fleet root (bicep/main.bicep + scripts/deploy.sh)');
   if (!R.configPath) missing.push('aegis.config.json path');
+  const placeholders = [];
+  if (R.cfToken && /[<>]/.test(R.cfToken)) placeholders.push('CF_API_TOKEN');
+  if (R.accountId && /[<>]/.test(R.accountId)) placeholders.push('CF_ACCOUNT_ID');
+  if (R.operatorEmail && /[<>]/.test(R.operatorEmail)) placeholders.push('CF_OPERATOR_EMAIL');
+  if (placeholders.length) {
+    console.log(c.red(`\nup --go ABORT (nothing created) — these env vars still hold <placeholder> text: $${placeholders.join(', $')}`));
+    console.log('  Set them to the real values (no angle brackets), then re-run.');
+    return 2;
+  }
   if (missing.length) {
     console.log(c.red(`\nup --go ABORT (nothing created) — missing: ${missing.join(', ')}`));
     return 2;
@@ -119,7 +140,6 @@ async function runUp(file, opts = {}) {
   }
 
   const psScript = path.join(R.fleetRoot, 'scripts', 'cloudflare-provision.ps1');
-  const deployScript = path.join(R.fleetRoot, 'scripts', 'deploy.sh');
   const tokenFile = path.join(os.tmpdir(), `cf-tunnel-${v.name}-${Date.now()}.txt`);
   const step = (n, msg) => console.log(c.bold(`\n[${n}/5] ${msg}`));
 
@@ -130,7 +150,7 @@ async function runUp(file, opts = {}) {
       '-AgentName', v.name, '-OperatorEmail', R.operatorEmail, '-AccountId', R.accountId,
       '-Domain', v.domain, '-AgentProfile', v.profile, '-WebchatPort', String(v.webchatPort),
       '-TokenOutFile', tokenFile,
-    ]);
+    ], { cwd: R.fleetRoot });
     if (!ok1) { console.log(c.red('\nStep 1 failed (cloudflare-provision.ps1). Nothing billable created.')); return 1; }
     let tunnelToken = '';
     try { tunnelToken = fs.readFileSync(tokenFile, 'utf8').trim(); } catch { /* handled below */ }
@@ -155,13 +175,16 @@ async function runUp(file, opts = {}) {
 
     // 5. Deploy — billable, last
     step(5, `Deploy the VM (BILLABLE) — ${R.d.azure.resourceGroup} / ${R.d.azure.vmName}`);
-    const ok5 = runScript(R.bash, [deployScript, v.profile, v.name], {
-      CF_TUNNEL_TOKEN: tunnelToken,
-      SSH_PUBKEY: R.pubkey,
-      SSH_CIDR: v.sshCidr || '',
-      AZ_LOCATION: v.region,
-      REPO_URL: v.repoUrlIsDefault ? '' : v.repoUrl,
-      REPO_REF: v.repoRef || '',
+    const ok5 = runScript(R.bash, ['scripts/deploy.sh', v.profile, v.name], {
+      cwd: R.fleetRoot,
+      env: {
+        CF_TUNNEL_TOKEN: tunnelToken,
+        SSH_PUBKEY: R.pubkey,
+        SSH_CIDR: v.sshCidr || '',
+        AZ_LOCATION: v.region,
+        REPO_URL: v.repoUrlIsDefault ? '' : v.repoUrl,
+        REPO_REF: v.repoRef || '',
+      },
     });
     if (!ok5) { console.log(c.red('\nStep 5 failed (deploy.sh). CF + token + registration are done; re-run deploy.sh, or decommission to clean up.')); return 1; }
 

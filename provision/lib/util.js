@@ -33,10 +33,13 @@ function runCapture(cmd, args, opts = {}) {
 }
 
 function which(bin) {
+  // Direct spawn (no shell) so this doesn't trip the shell-args deprecation warning.
+  // where.exe (Windows) and sh (POSIX) are real executables the OS resolves directly.
   const probe = process.platform === 'win32'
-    ? runCapture('where', [bin])
-    : runCapture('sh', ['-c', `command -v ${bin}`]);
-  return probe.ok && probe.stdout ? probe.stdout.split(/\r?\n/)[0].trim() : null;
+    ? spawnSync('where', [bin], { encoding: 'utf8' })
+    : spawnSync('sh', ['-c', `command -v ${bin}`], { encoding: 'utf8' });
+  if (probe.error || probe.status !== 0 || !probe.stdout) return null;
+  return probe.stdout.trim().split(/\r?\n/)[0].trim();
 }
 
 // Locate the fleet repo root: the dir holding bicep/main.bicep AND scripts/deploy.sh.
