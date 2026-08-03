@@ -1,0 +1,11 @@
+{
+  "contract": 1,
+  "name": "atlas-01",
+  "profile": "keel",
+  "domain": "",
+  "webchatPort": 8443,
+  "region": "",
+  "sshCidr": "",
+  "repoUrl": "",
+  "repoRef": ""
+}

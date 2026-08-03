@@ -82,9 +82,9 @@ function validateContract(raw) {
     errors.push(`"profile" must be one of ${PROFILES.join(' | ')} (got ${JSON.stringify(raw.profile)})`);
   }
 
-  // domain (optional -> default)
+  // domain (optional; "" or omitted -> default)
   let domain = DEFAULT_DOMAIN;
-  if ('domain' in raw) {
+  if ('domain' in raw && raw.domain !== '') {
     if (typeof raw.domain !== 'string' || !DOMAIN_RE.test(raw.domain)) {
       errors.push(`"domain" must be a valid domain name (got ${JSON.stringify(raw.domain)})`);
     } else {
@@ -102,9 +102,9 @@ function validateContract(raw) {
     }
   }
 
-  // region (optional -> default)
+  // region (optional; "" or omitted -> default)
   let region = DEFAULT_REGION;
-  if ('region' in raw) {
+  if ('region' in raw && raw.region !== '') {
     if (typeof raw.region !== 'string' || !REGION_RE.test(raw.region)) {
       errors.push(`"region" must be an Azure region string like "eastus2" (got ${JSON.stringify(raw.region)})`);
     } else {
@@ -124,10 +124,10 @@ function validateContract(raw) {
     }
   }
 
-  // repoUrl (optional override; default is per-profile)
+  // repoUrl (optional override; "" or omitted -> per-profile default)
   let repoUrl = '';
   let repoUrlIsDefault = true;
-  if ('repoUrl' in raw) {
+  if ('repoUrl' in raw && raw.repoUrl !== '') {
     if (typeof raw.repoUrl !== 'string' || !HTTPS_GIT_RE.test(raw.repoUrl)) {
       errors.push(`"repoUrl" must be an https git URL ending in .git (got ${JSON.stringify(raw.repoUrl)})`);
     } else {

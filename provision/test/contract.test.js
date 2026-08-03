@@ -88,3 +88,30 @@ test('castor profile resolves the castor default repo', () => {
   assert.strictEqual(r.ok, true, r.errors.join('; '));
   assert.strictEqual(r.value.repoUrl, PROFILE_REPO.castor);
 });
+
+// Regression: an explicit "" on an optional field means "use default", exactly
+// like omitting it. (repoUrl "" previously failed the .git regex.)
+test('empty-string optionals all resolve to defaults', () => {
+  const r = loadContract(F('valid-empty-optionals.agent.jsonc'));
+  assert.strictEqual(r.ok, true, r.errors.join('; '));
+  assert.strictEqual(r.value.domain, DEFAULT_DOMAIN);
+  assert.strictEqual(r.value.region, DEFAULT_REGION);
+  assert.strictEqual(r.value.sshCidr, '');
+  assert.strictEqual(r.value.repoRef, '');
+  assert.strictEqual(r.value.repoUrl, PROFILE_REPO.keel);
+  assert.strictEqual(r.value.repoUrlIsDefault, true);
+});
+
+test('empty-string repoUrl resolves to the profile default (not an error)', () => {
+  const r = validateContract({ contract: 1, name: 'a1', profile: 'keel', repoUrl: '' });
+  assert.strictEqual(r.ok, true, r.errors.join('; '));
+  assert.strictEqual(r.value.repoUrl, PROFILE_REPO.keel);
+  assert.strictEqual(r.value.repoUrlIsDefault, true);
+});
+
+// The shipped template must always validate against its own validator.
+test('the committed agents/example.agent.jsonc is valid', () => {
+  const example = path.join(__dirname, '..', '..', 'agents', 'example.agent.jsonc');
+  const r = loadContract(example);
+  assert.strictEqual(r.ok, true, r.errors.join('; '));
+});
