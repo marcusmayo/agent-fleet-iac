@@ -1,0 +1,19 @@
+{
+  // Per-agent provisioning contract. Committed, secret-free. The fleetctl CLI is
+  // the only interpreter of this file and validates every field it renders from.
+  // Copy to agents/<name>.agent.jsonc and edit. Secrets are NEVER stored here —
+  // the Cloudflare tunnel token, SSH key, and operator secrets come from the
+  // environment / Key Vault at run time.
+
+  "contract": 1,             // compat floor; the CLI fails closed on an unknown major
+  "name": "example-01",      // ^[a-z][a-z0-9-]{1,23}$ ; becomes rg-<name>, <name>-vm, <name>.<domain>
+  "profile": "keel",         // castor | keel
+
+  // --- everything below is optional; shown with its default ---
+  "domain": "keel-pm.com",   // front-door zone (second domain later = just change this)
+  "webchatPort": 8443,       // tunnel ingress -> http://localhost:<port>
+  "region": "eastus2",       // Azure region
+  "sshCidr": "",             // "" = hardened (no public IP, tunnel-only); else e.g. "203.0.113.5/32"
+  "repoUrl": "",             // "" = per-profile default repo; override with an https .git URL
+  "repoRef": ""              // "" = default-branch HEAD; else a branch/tag/commit for a pinned build
+}

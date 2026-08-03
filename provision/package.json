@@ -1,0 +1,19 @@
+{
+  "name": "agent-fleet-provision",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Phased, contract-validated provisioning CLI for the agent fleet. Phase 1: check + plan (read-only, no cloud mutations).",
+  "type": "commonjs",
+  "bin": {
+    "fleetctl": "bin/fleetctl.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test",
+    "check": "node bin/fleetctl.js check",
+    "plan": "node bin/fleetctl.js plan"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,11 @@
+{
+  "contract": 1,
+  "name": "heimdall",
+  "profile": "castor",
+  "domain": "keel-pm.com",
+  "webchatPort": 8443,
+  "region": "eastus2",
+  "sshCidr": "203.0.113.5/32",
+  "repoUrl": "https://github.com/marcusmayo/castor.git",
+  "repoRef": "a431079", /* pinned build */
+}

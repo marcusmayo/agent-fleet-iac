@@ -1,0 +1,6 @@
+{
+  // minimal valid contract — everything else should default
+  "contract": 1,
+  "name": "atlas-01",
+  "profile": "keel"
+}
