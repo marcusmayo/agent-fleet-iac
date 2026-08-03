@@ -1,0 +1,176 @@
+'use strict';
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const { c, findFleetRoot, which } = require('./util');
+const { loadContract } = require('./contract');
+const { derive } = require('./derive');
+const pf = require('./preflight');
+const cf = require('./cfapi');
+const cfg = require('./aegisconfig');
+const { runRegister } = require('./register');
+
+const SET = (x) => (x ? c.green('set') : c.red('MISSING'));
+
+function gather(v, opts) {
+  const d = derive(v);
+  const fleetRoot = findFleetRoot();
+  const sk = pf.sshPubkey();
+  const { path: configPath } = cfg.resolveConfigPath(opts.aegisConfig, fleetRoot);
+  const gi = configPath ? cfg.gitignoreState(configPath) : { state: 'no-repo', detail: '' };
+  return {
+    d, fleetRoot, configPath, giState: gi.state,
+    pubkey: sk.pubkey,
+    pwsh: which('pwsh') || which('powershell'),
+    bash: which('bash'),
+    az: which('az'),
+    cfToken: process.env.CF_API_TOKEN || '',
+    accountId: process.env.CF_ACCOUNT_ID || '',
+    operatorEmail: process.env.CF_OPERATOR_EMAIL || '',
+  };
+}
+
+function printPlan(v, R) {
+  const d = R.d;
+  console.log(c.bold(`\nBring up "${v.name}" (${v.profile}) at ${d.cloudflare.fqdn}`));
+  console.log(c.dim('Order is cheap/reversible first; the VM — the only billable step — is last.\n'));
+
+  console.log(c.bold('0. preflight'));
+  console.log(`     CF_API_TOKEN        ${SET(R.cfToken)}`);
+  console.log(`     CF_ACCOUNT_ID       ${SET(R.accountId)}`);
+  console.log(`     CF_OPERATOR_EMAIL   ${R.operatorEmail ? R.operatorEmail : c.red('MISSING')}`);
+  console.log(`     SSH public key      ${R.pubkey ? c.green('resolved') : c.red('MISSING (set $SSH_PUBKEY or $AF_SSH_PUBKEY_FILE)')}`);
+  console.log(`     pwsh / bash / az    ${R.pwsh ? c.green('pwsh') : c.red('no pwsh')} / ${R.bash ? c.green('bash') : c.red('no bash')} / ${R.az ? c.green('az') : c.red('no az')}`);
+  console.log(`     aegis.config.json   ${R.configPath || c.red('unresolved')} ${R.configPath ? c.dim('(' + R.giState + ')') : ''}`);
+
+  console.log(c.bold('\n1. Cloudflare front door') + c.dim('  (scripts/cloudflare-provision.ps1 — creates/reuses tunnel, DNS, app, operator policy)'));
+  console.log(`     pwsh -File scripts/cloudflare-provision.ps1 -AgentName ${v.name} -OperatorEmail ${R.operatorEmail || '<email>'} \\`);
+  console.log(`          -AccountId ${c.dim('••••')} -Domain ${v.domain} -AgentProfile ${v.profile} -WebchatPort ${v.webchatPort}`);
+  console.log(c.dim(`     -> tunnel "${v.name}", DNS ${d.cloudflare.fqdn}, app "${v.name}", policy ${v.name}-operator; tunnel token captured (redacted)`));
+
+  console.log(c.bold('\n2. Service token') + c.dim('  (Cloudflare API)'));
+  console.log(`     POST /accounts/{acct}/access/service_tokens   { "name": "aegis-${v.name}" }`);
+  console.log(c.dim('     -> client_id + client_secret (secret written ONLY to aegis.config.json, never printed)'));
+
+  console.log(c.bold('\n3. Service Auth policy') + c.dim('  (Cloudflare API)'));
+  console.log(`     find app by domain ${d.cloudflare.fqdn} -> app_id`);
+  console.log(`     POST /accounts/{acct}/access/apps/{app_id}/policies`);
+  console.log(`          { "name": "aegis-${v.name}", "decision": "non_identity", "include": [{ "service_token": { "token_id": … } }] }`);
+
+  console.log(c.bold('\n4. Register') + c.dim('  (local, idempotent)'));
+  console.log(`     upsert { name: ${v.name}, profile: ${v.profile}, host: ${d.cloudflare.fqdn}, clientId, clientSecret } into aegis.config.json`);
+
+  console.log(c.bold('\n5. Deploy the VM') + c.red('  — BILLABLE') + c.dim('  (scripts/deploy.sh)'));
+  console.log(`     bash scripts/deploy.sh ${v.profile} ${v.name}   ${c.dim('(env: CF_TUNNEL_TOKEN, SSH_PUBKEY, SSH_CIDR, REPO_*)')}`);
+  console.log(c.dim(`     -> az deployment sub create -> ${d.azure.resourceGroup} + ${d.azure.vmName}${v.profile === 'castor' ? ' + vault/identity/backup' : ''}`));
+
+  console.log(c.bold('\nAfter up') + c.dim('  (cloud-init builds + brands the image ~4-8 min, then):'));
+  console.log(c.dim(`     scripts/ssh-open.ps1 …; ssh …; bash infra/scripts/bootstrap.sh      (runtime secrets)`));
+  console.log(c.dim(`     fleetctl check agents/${v.name}.agent.jsonc --live                    (expect HTTP 200)`));
+}
+
+// Run a script inheriting stdio so the operator sees progress; returns true on success.
+function runScript(cmd, args, extraEnv) {
+  console.log(c.dim(`\n$ ${cmd} ${args.join(' ')}`));
+  const r = spawnSync(cmd, args, {
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+    env: { ...process.env, ...(extraEnv || {}) },
+  });
+  return !r.error && r.status === 0;
+}
+
+async function runUp(file, opts = {}) {
+  console.log(c.cyan(`up${opts.go ? ' --go' : ' (plan)'}  ${file}`));
+  const res = loadContract(file);
+  if (!res.ok) {
+    console.log(c.red('\nContract INVALID:'));
+    for (const e of res.errors) console.log('  - ' + e);
+    return 1;
+  }
+  const v = res.value;
+  const R = gather(v, opts);
+  printPlan(v, R);
+
+  if (!opts.go) {
+    console.log(c.yellow('\nplan only — nothing was created. Re-run with --go to execute.'));
+    return 0;
+  }
+
+  // --- fail-fast preflight before touching anything ---
+  const missing = [];
+  if (!R.cfToken) missing.push('$CF_API_TOKEN');
+  if (!R.accountId) missing.push('$CF_ACCOUNT_ID');
+  if (!R.operatorEmail) missing.push('$CF_OPERATOR_EMAIL');
+  if (!R.pubkey) missing.push('SSH public key');
+  if (!R.pwsh) missing.push('pwsh/powershell');
+  if (!R.bash) missing.push('bash');
+  if (!R.az) missing.push('az');
+  if (!R.fleetRoot) missing.push('fleet root (bicep/main.bicep + scripts/deploy.sh)');
+  if (!R.configPath) missing.push('aegis.config.json path');
+  if (missing.length) {
+    console.log(c.red(`\nup --go ABORT (nothing created) — missing: ${missing.join(', ')}`));
+    return 2;
+  }
+  if (R.giState === 'not-ignored') {
+    console.log(c.red(`\nup --go ABORT — aegis.config.json is not gitignored; refusing to write a secret to a trackable file.`));
+    return 1;
+  }
+
+  const psScript = path.join(R.fleetRoot, 'scripts', 'cloudflare-provision.ps1');
+  const deployScript = path.join(R.fleetRoot, 'scripts', 'deploy.sh');
+  const tokenFile = path.join(os.tmpdir(), `cf-tunnel-${v.name}-${Date.now()}.txt`);
+  const step = (n, msg) => console.log(c.bold(`\n[${n}/5] ${msg}`));
+
+  try {
+    // 1. Cloudflare front door
+    step(1, 'Cloudflare front door (tunnel, DNS, app, operator policy)');
+    const ok1 = runScript(R.pwsh, ['-File', psScript,
+      '-AgentName', v.name, '-OperatorEmail', R.operatorEmail, '-AccountId', R.accountId,
+      '-Domain', v.domain, '-AgentProfile', v.profile, '-WebchatPort', String(v.webchatPort),
+      '-TokenOutFile', tokenFile,
+    ]);
+    if (!ok1) { console.log(c.red('\nStep 1 failed (cloudflare-provision.ps1). Nothing billable created.')); return 1; }
+    let tunnelToken = '';
+    try { tunnelToken = fs.readFileSync(tokenFile, 'utf8').trim(); } catch { /* handled below */ }
+    if (!tunnelToken) { console.log(c.red(`\nStep 1: tunnel token not written to ${tokenFile}. Is -TokenOutFile supported by the script?`)); return 1; }
+
+    // 2. Service token
+    step(2, `Service token aegis-${v.name} (Cloudflare API)`);
+    const token = await cf.createServiceToken(R.accountId, `aegis-${v.name}`, R.cfToken);
+    console.log(c.green(`  created — clientId ${token.clientId}  (secret held in-memory)`));
+
+    // 3. Service Auth policy
+    step(3, 'Service Auth policy on the agent app (Cloudflare API)');
+    const app = await cf.findAppByHostname(R.accountId, R.d.cloudflare.fqdn, R.cfToken);
+    if (!app) { console.log(c.red(`  app for ${R.d.cloudflare.fqdn} not found — did step 1 create it?`)); return 1; }
+    const action = await cf.upsertServiceAuthPolicy(R.accountId, app.id, `aegis-${v.name}`, token.id, R.cfToken);
+    console.log(c.green(`  policy ${action} on app ${app.id}`));
+
+    // 4. Register (in-process; secret -> gitignored config only)
+    step(4, 'Register in aegis.config.json');
+    const rc = runRegister(file, { clientId: token.clientId, clientSecret: token.clientSecret, aegisConfig: opts.aegisConfig });
+    if (rc !== 0) { console.log(c.red('  register failed — token + policy exist; fix the config and re-run register.')); return rc; }
+
+    // 5. Deploy — billable, last
+    step(5, `Deploy the VM (BILLABLE) — ${R.d.azure.resourceGroup} / ${R.d.azure.vmName}`);
+    const ok5 = runScript(R.bash, [deployScript, v.profile, v.name], {
+      CF_TUNNEL_TOKEN: tunnelToken,
+      SSH_PUBKEY: R.pubkey,
+      SSH_CIDR: v.sshCidr || '',
+      AZ_LOCATION: v.region,
+      REPO_URL: v.repoUrlIsDefault ? '' : v.repoUrl,
+      REPO_REF: v.repoRef || '',
+    });
+    if (!ok5) { console.log(c.red('\nStep 5 failed (deploy.sh). CF + token + registration are done; re-run deploy.sh, or decommission to clean up.')); return 1; }
+
+    console.log(c.green(`\nup --go OK — ${v.name} provisioned. cloud-init is building the image (~4-8 min).`));
+    console.log(c.dim('Next: ssh-open.ps1 + bootstrap.sh for runtime secrets, then  fleetctl check ' + file + ' --live'));
+    return 0;
+  } finally {
+    try { fs.unlinkSync(tokenFile); } catch { /* best effort */ }
+  }
+}
+
+module.exports = { runUp };

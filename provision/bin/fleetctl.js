@@ -4,6 +4,7 @@ const { runCheck } = require('../lib/check');
 const { runPlan } = require('../lib/plan');
 const { runRegister } = require('../lib/register');
 const { runCheckLive } = require('../lib/live');
+const { runUp } = require('../lib/up');
 const { c } = require('../lib/util');
 
 const HELP = `fleetctl — agent-fleet provisioning
@@ -11,6 +12,7 @@ const HELP = `fleetctl — agent-fleet provisioning
 Usage:
   fleetctl check    <contract.agent.jsonc> [--contract-only] [--live] [--aegis-config <path>]
   fleetctl plan     <contract.agent.jsonc> [--require-whatif]
+  fleetctl up       <contract.agent.jsonc> [--go] [--aegis-config <path>]
   fleetctl register <contract.agent.jsonc> [--aegis-config <path>]
   fleetctl --help
 
@@ -26,6 +28,13 @@ Commands:
   plan      Validate the contract and preview every Azure + Cloudflare + register
             resource it will create, then run \`az deployment sub what-if\` (read-only).
             --require-whatif  exit non-zero if the what-if cannot be run (for CI).
+
+  up        Bring up a new agent end to end. Default prints the full ordered plan
+            (cheap/reversible steps first, the billable VM last) and changes nothing.
+            --go   execute: Cloudflare front door (cloudflare-provision.ps1) -> service
+                   token + Service Auth policy (CF API) -> register -> deploy.sh (VM).
+                   Needs \$CF_API_TOKEN, \$CF_ACCOUNT_ID, \$CF_OPERATOR_EMAIL, an SSH key,
+                   and pwsh + bash + az. Fails fast; the secret is never printed.
 
   register  Add/update the agent's entry in aegis.config.json (idempotent per name;
             refuses if that file is not gitignored). Service-token credentials come
@@ -79,6 +88,10 @@ async function main(argv) {
   if (cmd === 'register') {
     if (!file) { console.error(c.red('register: missing <contract.agent.jsonc>')); return 2; }
     return runRegister(file, { aegisConfig });
+  }
+  if (cmd === 'up') {
+    if (!file) { console.error(c.red('up: missing <contract.agent.jsonc>')); return 2; }
+    return runUp(file, { go: flags.has('--go'), aegisConfig });
   }
 
   console.error(c.red(`unknown command "${cmd}"`) + '\n');

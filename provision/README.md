@@ -7,7 +7,7 @@ validates every input it renders from.
 
 Zero runtime dependencies. Node >= 18.
 
-## Phase 1 (this) — read-only
+## Read-only commands — `check` and `plan`
 
 ```
 node bin/fleetctl.js check agents/<name>.agent.jsonc [--contract-only]
@@ -52,15 +52,21 @@ environment / Key Vault at run time.
 npm test        # node --test  (jsonc + contract)
 ```
 
-## Roadmap
+## Full commands
 
-- **Phase 2** — `__AGENT_NAME__` brand-at-spin-up (adds `__AGENT_NAME__` to the
-  `vm.bicep` cloud-init replace chain so `system/agent.yaml` reflects the agent's
-  own name, not the profile default).
-- **Phase 3** — `up` (cloudflare-provision → deploy → aegis service token),
-  `register` (append the entry to `aegis.config.json`), and `check --live`
-  (post-deploy health via the tunnel). Requires a throwaway spin-up to validate.
+Beyond the read-only `check`/`plan` above, the CLI also drives a live bring-up:
 
-The Express endpoint in `../aegis/aegis-provision.js` is the separate, deferred
-**approach-B** seam (the "Add agent" button wraps this same deploy path); it is
-not part of this CLI.
+- **`up <contract>`** — prints the full ordered runbook (plan); `--go` executes it:
+  Cloudflare front door → service token + Service Auth policy → register → deploy the VM.
+- **`register <contract>`** — upserts the agent into `aegis.config.json` (fail-closed if
+  the file isn't gitignored; secret never printed).
+- **`check <contract> --live`** — probes the deployed agent's `/health/liveliness` (HTTP 200)
+  through the tunnel using the token in `aegis.config.json`.
+
+The end-to-end "bringing up a new agent" runbook — every step, with the environment it
+needs — lives in the repo's top-level `README.md`.
+
+Agent name branding at spin-up is wired via `__AGENT_NAME__` in the `vm.bicep` cloud-init
+replace chain (so `system/agent.yaml` reflects the agent's own name). The Express endpoint
+in `../aegis/aegis-provision.js` remains the separate, deferred **approach-B** seam (the
+"Add agent" button wraps this same deploy path); it is not part of this CLI.

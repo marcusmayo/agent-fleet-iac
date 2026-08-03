@@ -123,6 +123,105 @@ dashboard → **Networks → Tunnels → Create tunnel** (name it after the agen
 
 ---
 
+## Bringing up a new agent — the `fleetctl` path
+
+`provision/fleetctl` collapses the manual provisioning below (Parts 1–2) into one
+contract-driven command. Each agent is described by a committed, secret-free contract
+at `agents/<name>.agent.jsonc`; the CLI validates it and drives the **same** Bicep +
+Cloudflare steps you'd run by hand — one ground truth, not a second code path. Node ≥ 18,
+zero runtime dependencies. Run everything from the repo root.
+
+### Step 1 — write the contract
+
+`agents/<name>.agent.jsonc` (template: `agents/example.agent.jsonc`):
+
+```jsonc
+{
+  "contract": 1,            // compat floor; the CLI fails closed on an unknown major
+  "name": "atlas-01",       // ^[a-z][a-z0-9-]{1,23}$  ->  rg-<name>, <name>-vm, <name>.<domain>
+  "profile": "keel",        // castor | keel
+  "domain": "keel-pm.com",  // optional (default keel-pm.com)
+  "sshCidr": "",            // "" = hardened (no public IP, tunnel-only); else "1.2.3.4/32"
+  "repoRef": ""             // "" = default-branch HEAD; else a pinned commit/branch/tag
+}
+```
+
+### Step 2 — set the environment (once per session)
+
+```powershell
+$env:CF_API_TOKEN      = "<Cloudflare API token: Zero Trust + DNS edit>"
+$env:CF_ACCOUNT_ID     = "<Cloudflare account id>"
+$env:CF_OPERATOR_EMAIL = "<your operator email>"        # the human one-time-PIN allow policy
+$env:SSH_PUBKEY        = Get-Content "$HOME\.ssh\keel_t2.pub" -Raw
+$env:AEGIS_CONFIG      = "<path-to-your-aegis-repo>\aegis.config.json"
+az login    # if not already
+```
+
+Also required on PATH: `pwsh` (or `powershell`), `bash`, `az`.
+
+### Step 3 — preview, then execute
+
+`up` with no flag prints the full ordered plan and **changes nothing** — cheap,
+reversible steps first, the billable VM last. Read it, then add `--go`:
+
+```powershell
+node .\provision\bin\fleetctl.js up .\agents\atlas-01.agent.jsonc          # plan (no changes)
+node .\provision\bin\fleetctl.js up .\agents\atlas-01.agent.jsonc --go      # execute
+```
+
+`--go` runs, fail-fast, in this order:
+
+1. **Cloudflare front door** — `scripts/cloudflare-provision.ps1`: creates/reuses the named
+   tunnel, the DNS record `<name>.<domain>`, the self-hosted Access app, and the
+   `<name>-operator` (email) policy. The tunnel token is captured for step 5 (written to a
+   temp file via `-TokenOutFile`, then deleted).
+2. **Service token** — `POST /accounts/{acct}/access/service_tokens` mints `aegis-<name>`. Its
+   `client_id`/`client_secret` are held in memory; the secret is written **only** to
+   `aegis.config.json` (step 4) and is never printed.
+3. **Service Auth policy** — finds the app by hostname and adds a policy with
+   `decision: non_identity` including that service token, so Aegis reaches the agent
+   non-interactively. (The action must be *Service Auth* / `non_identity`, **not** Allow, or
+   Cloudflare prompts for an interactive login.)
+4. **Register** — upserts `{ name, profile, host, clientId, clientSecret }` into
+   `aegis.config.json` (idempotent by name; **refuses** if that file isn't gitignored).
+5. **Deploy the VM (billable)** — `scripts/deploy.sh <profile> <name>`:
+   `az deployment sub create` → `rg-<name>` + `<name>-vm` (+ per-agent Key Vault, managed
+   identity, and blob backup for the `castor` profile). Last on purpose: a failure in
+   steps 1–4 never leaves an orphaned, billable VM.
+
+### Step 4 — finish and verify
+
+cloud-init builds and **brands** the image (the webchat shows `<name>`, not the repo default)
+over ~4–8 minutes. Then inject runtime secrets and confirm health:
+
+```powershell
+.\scripts\ssh-open.ps1 -AgentName atlas-01      # temp SSH rule for your IP (NSG is deny-all)
+# ssh in (command is printed); on the VM run:  bash infra/scripts/bootstrap.sh    (TOTP / model key)
+.\scripts\ssh-close.ps1 -AgentName atlas-01     # back to zero-inbound
+
+node .\provision\bin\fleetctl.js check .\agents\atlas-01.agent.jsonc --live   # expect HTTP 200
+```
+
+`check --live` reads the agent's service token from `aegis.config.json` and probes
+`https://<name>.<domain>/health/liveliness` through the tunnel. A 200 means the agent is up
+and Aegis can reach it. Start Aegis (`node aegis.js`) to see it in the console.
+
+### CLI command summary
+
+| command | what it does | changes anything? |
+| --- | --- | --- |
+| `check <contract>` | validate contract + preflight env (az, CF token, SSH key, bicepparam) | no |
+| `check <contract> --live` | probe the deployed agent's `/health/liveliness` (HTTP 200) | no |
+| `plan <contract>` | preview every Azure + Cloudflare + register resource, then `az … what-if` | no |
+| `up <contract>` | print the full runbook above | no |
+| `up <contract> --go` | execute the runbook | **yes** — CF resources, a service token, a VM |
+| `register <contract>` | upsert the agent into `aegis.config.json` (`$AEGIS_CLIENT_ID`/`_SECRET`) | writes local config |
+
+The fully manual, step-by-step equivalent (for debugging or first-run understanding) is
+Parts 1–5 below.
+
+---
+
 ## Part 1 — stand up your **Castor-profile agent**
 
 ```bash

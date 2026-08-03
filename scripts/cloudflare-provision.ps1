@@ -14,7 +14,8 @@ param(
   [string] $Domain = "keel-pm.com",
   [ValidateSet("castor","keel","atlas")] [string] $AgentProfile = "keel",
   [int]    $WebchatPort = 8443,
-  [string] $SessionDuration = "24h"
+  [string] $SessionDuration = "24h",
+  [string] $TokenOutFile = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -125,6 +126,13 @@ function Ensure-AccessApp {
   }
 }
 Ensure-AccessApp $fqdn $AgentName
+
+# For non-interactive callers (fleetctl up): emit the tunnel token to a file only
+# after every CF step above succeeded. The caller reads it, then deletes it.
+if ($TokenOutFile) {
+  Set-Content -Path $TokenOutFile -Value $token -NoNewline -Encoding ascii
+  Write-Host "   tunnel token written to $TokenOutFile (delete after use)" -ForegroundColor Yellow
+}
 
 Write-Host ""
 Write-Host "Cloudflare front door ready for $AgentName." -ForegroundColor Green
