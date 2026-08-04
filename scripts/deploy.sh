@@ -26,11 +26,12 @@ export AZ_LOCATION="${AZ_LOCATION:-eastus2}"
 if [ -n "${REPO_URL:-}" ]; then export REPO_URL; fi
 if [ -n "${REPO_REF:-}" ]; then export REPO_REF; fi
 
-# Castor's per-agent Key Vault grants the deployer 'Key Vault Secrets Officer' so
-# you can set the operator secrets post-apply. Resolve the signed-in user's object
-# id (override DEPLOYER_OBJECT_ID for service-principal deploys). Empty is fine —
-# the raKvSecretsOfficer assignment is simply skipped and can be granted manually.
-if [ "$PROFILE" = "castor" ] && [ -z "${DEPLOYER_OBJECT_ID:-}" ]; then
+# Every agent's per-agent Key Vault grants the deployer 'Key Vault Secrets Officer'
+# so you can seed the operator secrets post-apply. Resolve the signed-in user's
+# object id (override DEPLOYER_OBJECT_ID for service-principal deploys). Empty is
+# fine — the raKvSecretsOfficer assignment is simply skipped and can be granted
+# manually — but without it the seed step can't write to the vault.
+if [ -z "${DEPLOYER_OBJECT_ID:-}" ]; then
   DEPLOYER_OBJECT_ID="$(az ad signed-in-user show --query id -o tsv 2>/dev/null || true)"
 fi
 export DEPLOYER_OBJECT_ID="${DEPLOYER_OBJECT_ID:-}"

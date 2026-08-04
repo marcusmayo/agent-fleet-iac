@@ -43,7 +43,7 @@ param repoUrl string = 'https://github.com/marcusmayo/keel-portfolio-management.
 @description('Git ref (branch, tag, or commit SHA) to check out for a reproducible, pinned build. Empty = default-branch HEAD. Pin this to the commit that carries your ADO lane.')
 param repoRef string = ''
 
-@description('AAD object id of the deploying principal, for the Key Vault Secrets Officer assignment (Castor profile only; empty for Keel). Fill via: az ad signed-in-user show --query id -o tsv')
+@description('AAD object id of the deploying principal, granted Key Vault Secrets Officer so it can seed the vault post-apply (az keyvault secret set). Now ALL profiles have a vault, so pass this for every agent. Get it via: az ad signed-in-user show --query id -o tsv')
 param deployerObjectId string = ''
 
 var rgName = 'rg-${agentName}'

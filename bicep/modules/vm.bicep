@@ -23,13 +23,16 @@ param deployerObjectId string = ''
 var vmName = '${agentName}-vm'
 var wantPublicIp = !empty(sshAccessCidr)
 
-// --- Castor-profile vault/identity/backup gate ---
-// Keel is unchanged. For Castor, port Castor's Terraform: a per-agent Key Vault,
-// a user-assigned managed identity, and identity-based blob backup. Operator
-// secrets are set post-apply via `az keyvault secret set` (none are created here);
-// bootstrap.sh fetches them at first login via the MI with a retry loop to absorb
-// RBAC propagation lag (Bicep has no time_sleep equivalent).
-var wantsVault = agentProfile == 'castor'
+// --- Vault + identity (ALL profiles) and blob backup (Castor only) ---
+// EVERY agent now gets a per-agent Key Vault + user-assigned managed identity so it
+// can fetch its runtime secrets non-interactively at first boot (managed identity ->
+// Key Vault Secrets User, READ-ONLY). No secrets are created here; the deployer seeds
+// them post-apply via `az keyvault secret set`, and bootstrap.sh fetches them with a
+// retry loop to absorb RBAC propagation lag (Bicep has no time_sleep equivalent).
+// Blob backup (storage account + Storage Blob Data Contributor) stays Castor-only for
+// now — Keel gains it later if/when it activates the azure_backup capability.
+var wantsVault = true
+var wantsBackup = agentProfile == 'castor'
 var suffix = substring(uniqueString(subscription().id, agentName), 0, 5)
 var kvName = '${agentName}-kv-${suffix}'
 var saName = toLower('${agentName}sa${suffix}')
@@ -40,10 +43,10 @@ var roleKvSecretsOfficer = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
 var roleStorageBlobContributor = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 
 // cloud-init: one file, placeholders replaced at deploy time. The tunnel token is
-// the only secret in customData and is scrubbed from cloud logs after install;
-// runtime secrets (TOTP, model key) are injected later via bootstrap over SSH.
-// For Castor, the vault name and MI client id are written into .provision-flags so
-// bootstrap.sh can do a non-interactive managed-identity fetch; empty for Keel.
+// the only secret in customData and is scrubbed from cloud logs after install.
+// For EVERY agent the vault name and MI client id are written into .provision-flags
+// so bootstrap.sh can fetch runtime secrets via a non-interactive managed-identity
+// call (no key on disk).
 var ciRaw = loadTextContent('../cloud-init/agent-cloudflared.yaml')
 var kvNameForCi = wantsVault ? kvName : ''
 var msiClientIdForCi = wantsVault ? uai!.properties.clientId : ''
@@ -126,7 +129,7 @@ resource nic 'Microsoft.Network/networkInterfaces@2023-11-01' = {
   }
 }
 
-// --- Castor-profile: managed identity, per-agent Key Vault, identity-based backup ---
+// --- Managed identity + per-agent Key Vault (all profiles); identity-based backup (Castor) ---
 resource uai 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = if (wantsVault) {
   name: uaiName
   location: location
@@ -150,7 +153,7 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = if (wantsVault) {
   }
 }
 
-resource backupStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = if (wantsVault) {
+resource backupStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = if (wantsBackup) {
   name: saName
   location: location
   sku: {
@@ -165,7 +168,7 @@ resource backupStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = if (want
   }
 }
 
-resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = if (wantsVault) {
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = if (wantsBackup) {
   parent: backupStorage
   name: 'default'
   properties: {
@@ -177,7 +180,7 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01'
   }
 }
 
-resource backupsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = if (wantsVault) {
+resource backupsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = if (wantsBackup) {
   parent: blobService
   name: 'backups'
   properties: {
@@ -197,7 +200,7 @@ resource raKvSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
 }
 
 // identity -> write backups (data plane; no account keys on the VM)
-resource raStorageBlob 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (wantsVault) {
+resource raStorageBlob 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (wantsBackup) {
   name: guid(backupStorage.id, uaiName, roleStorageBlobContributor)
   scope: backupStorage
   properties: {
