@@ -123,8 +123,11 @@ function Ensure-AccessApp {
   $pol  = $pols | Where-Object { $_.name -eq "$AppName-operator" } | Select-Object -First 1
   $pbody = @{ name = "$AppName-operator"; decision = "allow"; include = @(@{ email = @{ email = $OperatorEmail } }) }
   if ($pol) {
-    Invoke-CF PUT "/accounts/$AccountId/access/apps/$id/policies/$($pol.id)" $pbody | Out-Null
-    Write-Host "   policy '$AppName-operator' allow $OperatorEmail (updated)"
+    # PUT-in-place 400s under Cloudflare's reusable-policy migration; delete + recreate
+    # is idempotent and always POSTs the shape the API currently expects.
+    Invoke-CF DELETE "/accounts/$AccountId/access/apps/$id/policies/$($pol.id)" | Out-Null
+    Invoke-CF POST "/accounts/$AccountId/access/apps/$id/policies" $pbody | Out-Null
+    Write-Host "   policy '$AppName-operator' allow $OperatorEmail (replaced)"
   } else {
     Invoke-CF POST "/accounts/$AccountId/access/apps/$id/policies" $pbody | Out-Null
     Write-Host "   policy '$AppName-operator' allow $OperatorEmail (created)"
