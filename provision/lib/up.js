@@ -86,8 +86,8 @@ function printPlan(v, R) {
   console.log(`     bash scripts/deploy.sh ${v.profile} ${v.name}   ${c.dim('(env: CF_TUNNEL_TOKEN, SSH_PUBKEY, SSH_CIDR, REPO_*)')}`);
   console.log(c.dim(`     -> az deployment sub create -> ${d.azure.resourceGroup} + ${d.azure.vmName}${v.profile === 'castor' ? ' + vault/identity/backup' : ''}`));
 
-  console.log(c.bold('\nAfter up') + c.dim('  (cloud-init builds + brands the image ~4-8 min, then):'));
-  console.log(c.dim(`     scripts/ssh-open.ps1 …; ssh …; bash infra/scripts/bootstrap.sh      (runtime secrets)`));
+  console.log(c.bold('\nAfter up') + c.dim('  (cloud-init builds + brands ~4-8 min, then WAITS for its vault seed):'));
+  console.log(c.dim(`     fleetctl set-secrets ${v.name}                                 (seed vault; VM self-configures, no SSH)`));
   console.log(c.dim(`     fleetctl check agents/${v.name}.agent.jsonc --live                    (expect HTTP 200)`));
 
   const gate = policy.checkProvision(R.pol, { currentFleet: R.fleet, names: [v.name], region: v.region });
@@ -263,7 +263,11 @@ async function runUp(file, opts = {}) {
     if (!ok5) { console.log(c.red('\nStep 5 failed (deploy.sh). CF + token + registration are done; re-run deploy.sh, or decommission to clean up.')); return 1; }
 
     console.log(c.green(`\nup --go OK — ${v.name} provisioned. cloud-init is building the image (~4-8 min).`));
-    console.log(c.dim('Next: ssh-open.ps1 + bootstrap.sh for runtime secrets, then  fleetctl check ' + file + ' --live'));
+    console.log(c.green('  The VM is WAITING for its vault seed — it self-configures once seeded (no SSH).'));
+    console.log(c.bold('  NEXT (within ~10 min): seed the vault so it comes up on its own →'));
+    console.log(c.bold('    fleetctl set-secrets ' + v.name + '   ') + c.dim('(enrolls TOTP + writes the API keys)'));
+    console.log(c.dim('  Wait ~1 min first (Key Vault role propagation), then set-secrets. Do NOT re-run up --go'));
+    console.log(c.dim('  (RG-exists guard aborts) and do NOT ssh+bootstrap (old flow). Then: fleetctl check ' + file + ' --live'));
     console.log(c.dim('Aegis reads aegis.config.json at startup — restart it (node aegis.js) to show the new agent.'));
     return 0;
   } catch (e) {
