@@ -35,6 +35,11 @@ runcmd:
   # Permission-deny and abort the whole runcmd (set -e). build-image.sh writes no
   # repo files (docker build only), so chown-before is complete.
   - chown -R __ADMIN_USER__:__ADMIN_USER__ /home/__ADMIN_USER__/agent
+  # build-image.sh tags the image from `git rev-parse` and runs here as root, but the
+  # tree is now admin-owned — git's ownership-safety check would refuse and fail the
+  # unattended build (works by hand only because the operator IS the admin user).
+  # Grant root an exception for this one repo so cloud-init builds without a human.
+  - git config --global --add safe.directory /home/__ADMIN_USER__/agent
   - cd "$AGENT_DIR" && bash ./infra/scripts/build-image.sh > /var/log/agent-image-build.log 2>&1
   - "{ dpkg-query -W docker.io docker-compose-v2 git cloudflared; } > /var/log/agent-provision-versions.log 2>&1"
 final_message: "agent (__AGENT_PROFILE__) cloud-init complete after $UPTIME s -- next: SSH in, run infra/scripts/bootstrap.sh, then reach the webchat via its Cloudflare hostname"
