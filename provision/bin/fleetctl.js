@@ -3,6 +3,7 @@
 const { runCheck } = require('../lib/check');
 const { runPlan } = require('../lib/plan');
 const { runRegister, runDeregister } = require('../lib/register');
+const { runSetSecrets } = require('../lib/secrets');
 const { runCheckLive } = require('../lib/live');
 const { runUp } = require('../lib/up');
 const { c } = require('../lib/util');
@@ -15,6 +16,7 @@ Usage:
   fleetctl up       <contract.agent.jsonc> [--go] [--aegis-config <path>]
   fleetctl register <contract.agent.jsonc> [--aegis-config <path>]
   fleetctl deregister <name | contract.agent.jsonc> [--aegis-config <path>]
+  fleetctl set-secrets <agent>
   fleetctl --help
 
 Commands:
@@ -47,6 +49,11 @@ Commands:
 
   deregister  Remove an agent's entry from aegis.config.json (by name or contract) so
             Aegis self-updates on decommission. Idempotent; never touches other agents.
+
+  set-secrets  Seed an agent's Key Vault with the three bootstrap secrets so it can
+            self-configure at first boot. TOTP is generated here (enroll the printed QR /
+            secret); the two API keys are read from \$ANTHROPIC_API_KEY + \$OPENROUTER_API_KEY
+            in the environment (never passed as args). Requires az + Secrets Officer on the vault.
 
   --aegis-config <path>   Path to aegis.config.json (else \$AEGIS_CONFIG, \$AEGIS_DIR,
                           or <fleet-parent>/aegis/aegis.config.json).
@@ -99,6 +106,10 @@ async function main(argv) {
   if (cmd === 'deregister') {
     if (!file) { console.error(c.red('deregister: missing <name-or-contract>')); return 2; }
     return runDeregister(file, { aegisConfig });
+  }
+  if (cmd === 'set-secrets') {
+    if (!file) { console.error(c.red('set-secrets: missing <agent>')); return 2; }
+    return runSetSecrets(file);
   }
   if (cmd === 'up') {
     if (!file) { console.error(c.red('up: missing <contract.agent.jsonc>')); return 2; }
