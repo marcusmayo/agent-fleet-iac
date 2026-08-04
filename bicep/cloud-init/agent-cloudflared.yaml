@@ -41,5 +41,12 @@ runcmd:
   # Grant root an exception for this one repo so cloud-init builds without a human.
   - git config --global --add safe.directory /home/__ADMIN_USER__/agent
   - cd "$AGENT_DIR" && bash ./infra/scripts/build-image.sh > /var/log/agent-image-build.log 2>&1
+  # Self-bootstrap unattended: run bootstrap.sh as the admin user (the tree owner; it
+  # uses sudo-docker). No TTY here, so it never prompts — it fetches secrets from the
+  # vault and, if they aren't seeded yet, WAITS loudly on the serial console (up to
+  # ~10 min) for `fleetctl set-secrets`, then aborts naming the missing secret. This is
+  # what makes provisioning fire-and-forget: up --go + set-secrets and the agent comes
+  # up on its own. If it aborts (never seeded), SSH in and run bootstrap.sh by hand.
+  - sudo -u __ADMIN_USER__ bash "$AGENT_DIR/infra/scripts/bootstrap.sh" > /var/log/agent-bootstrap.log 2>&1 || echo "bootstrap did not complete unattended -- SSH in and run infra/scripts/bootstrap.sh (see /var/log/agent-bootstrap.log)" | tee -a /var/log/agent-bootstrap.log
   - "{ dpkg-query -W docker.io docker-compose-v2 git cloudflared; } > /var/log/agent-provision-versions.log 2>&1"
-final_message: "agent (__AGENT_PROFILE__) cloud-init complete after $UPTIME s -- next: SSH in, run infra/scripts/bootstrap.sh, then reach the webchat via its Cloudflare hostname"
+final_message: "agent (__AGENT_PROFILE__) cloud-init complete after $UPTIME s -- it self-bootstraps from its Key Vault; seed with 'fleetctl set-secrets <agent>' if you haven't. Logs: /var/log/agent-bootstrap.log"
