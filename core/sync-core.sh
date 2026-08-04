@@ -6,8 +6,8 @@
 #   e.g.  ./core/sync-core.sh ~/castor                    scaffold/scripts scaffold/gate
 #         ./core/sync-core.sh ~/keel-portfolio-management scripts          gate
 #
-# Vendors core/*.js (+ verify-core.sh + a stamp) into <scripts-dest>, and if a
-# <gate-dest> is given, core/gate/*.js (+ verify-core.sh + a stamp) into it too.
+# Vendors core/*.js (+ fetch-secret.sh + verify-core.sh + a stamp) into <scripts-dest>,
+# and if a <gate-dest> is given, core/gate/*.js (+ verify-core.sh + a stamp) into it too.
 # Each dest gets its own .fleet-core-version carrying its manifest; each agent
 # Dockerfile runs verify-core.sh against each dest to fail-loud on drift.
 set -euo pipefail
@@ -23,7 +23,7 @@ vendor() {
   [ -d "$DEST" ] || { echo "FATAL: dest not found: $DEST"; exit 1; }
   [ -f "$MANIFEST" ] || { echo "FATAL: no manifest: $MANIFEST"; exit 1; }
   echo "Syncing fleet-core ($CORE_REF) -> $DEST"
-  for f in "$SRCDIR"/*.js "$SRCDIR"/*.yaml "$HERE"/verify-core.sh; do
+  for f in "$SRCDIR"/*.js "$SRCDIR"/*.yaml "$SRCDIR"/fetch-secret.sh "$HERE"/verify-core.sh; do
     [ -e "$f" ] || continue
     cp "$f" "$DEST/$(basename "$f")"
     echo "  vendored: $(basename "$f")"
