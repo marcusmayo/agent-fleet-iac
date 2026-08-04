@@ -123,11 +123,11 @@ function Ensure-AccessApp {
   $pol  = $pols | Where-Object { $_.name -eq "$AppName-operator" } | Select-Object -First 1
   $pbody = @{ name = "$AppName-operator"; decision = "allow"; include = @(@{ email = @{ email = $OperatorEmail } }) }
   if ($pol) {
-    # PUT-in-place 400s under Cloudflare's reusable-policy migration; delete + recreate
-    # is idempotent and always POSTs the shape the API currently expects.
-    Invoke-CF DELETE "/accounts/$AccountId/access/apps/$id/policies/$($pol.id)" | Out-Null
-    Invoke-CF POST "/accounts/$AccountId/access/apps/$id/policies" $pbody | Out-Null
-    Write-Host "   policy '$AppName-operator' allow $OperatorEmail (replaced)"
+    # An existing policy may be a MIGRATED reusable policy, which Cloudflare's per-app
+    # policy endpoints now reject (PUT and DELETE both 400). It already allows the
+    # operator and works, so leave it in place. To change the operator, delete the app
+    # in the dashboard (or via API) and re-run, which recreates the policy fresh.
+    Write-Host "   policy '$AppName-operator' already present (left as-is)"
   } else {
     Invoke-CF POST "/accounts/$AccountId/access/apps/$id/policies" $pbody | Out-Null
     Write-Host "   policy '$AppName-operator' allow $OperatorEmail (created)"
