@@ -39,7 +39,10 @@ runcmd:
   # tree is now admin-owned — git's ownership-safety check would refuse and fail the
   # unattended build (works by hand only because the operator IS the admin user).
   # Grant root an exception for this one repo so cloud-init builds without a human.
-  - git config --global --add safe.directory /home/__ADMIN_USER__/agent
+  # MUST be --system (/etc/gitconfig): cloud-final.service runs with NO $HOME, and
+  # `git config --global` dies there with `fatal: $HOME not set` — under set -e that
+  # aborted the whole runcmd on example-04 (build + bootstrap never ran -> 502).
+  - git config --system --add safe.directory /home/__ADMIN_USER__/agent
   - cd "$AGENT_DIR" && bash ./infra/scripts/build-image.sh > /var/log/agent-image-build.log 2>&1
   # Self-bootstrap unattended: run bootstrap.sh as the admin user (the tree owner; it
   # uses sudo-docker). No TTY here, so it never prompts — it fetches secrets from the

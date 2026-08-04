@@ -49,4 +49,4 @@ az deployment sub create \
   -o jsonc
 
 echo ">> Provisioned. cloud-init is now building the image on the VM (~4-8 min)."
-echo ">> Next: SSH in, tail /var/log/agent-image-build.log, then run infra/scripts/bootstrap.sh"
+echo ">> Next (within ~10 min): seed the vault so the VM self-configures — fleetctl set-secrets <agent> (no SSH). Logs: /var/log/agent-image-build.log, /var/log/agent-bootstrap.log"
