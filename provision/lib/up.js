@@ -9,6 +9,7 @@ const { derive } = require('./derive');
 const pf = require('./preflight');
 const cf = require('./cfapi');
 const cfg = require('./aegisconfig');
+const policy = require('./policy');
 const { runRegister } = require('./register');
 
 const bad = (s) => !s || /[<>]/.test(s);                  // empty, or still a <placeholder>
@@ -29,8 +30,17 @@ function gather(v, opts) {
   const sk = pf.sshPubkey();
   const { path: configPath } = cfg.resolveConfigPath(opts.aegisConfig, fleetRoot);
   const gi = configPath ? cfg.gitignoreState(configPath) : { state: 'no-repo', detail: '' };
+
+  let pol;
+  try { pol = policy.loadPolicy(opts.policy); }
+  catch (e) { pol = { ...policy.DEFAULTS, source: '(error: ' + e.message + ')' }; }
+  let fleet = [];
+  try { if (configPath && fs.existsSync(configPath)) fleet = cfg.load(configPath).agents.map((a) => a.name); }
+  catch { /* unreadable config -> treat as empty fleet; register step will surface real errors */ }
+
   return {
     d, fleetRoot, configPath, giState: gi.state,
+    pol, fleet,
     pubkey: sk.pubkey,
     pwsh: resolvePwsh(),
     bash: resolveBash(),
@@ -78,6 +88,15 @@ function printPlan(v, R) {
   console.log(c.bold('\nAfter up') + c.dim('  (cloud-init builds + brands the image ~4-8 min, then):'));
   console.log(c.dim(`     scripts/ssh-open.ps1 …; ssh …; bash infra/scripts/bootstrap.sh      (runtime secrets)`));
   console.log(c.dim(`     fleetctl check agents/${v.name}.agent.jsonc --live                    (expect HTTP 200)`));
+
+  const gate = policy.checkProvision(R.pol, { currentFleet: R.fleet, names: [v.name], region: v.region });
+  const regionOk = Array.isArray(R.pol.allowedRegions) && R.pol.allowedRegions.includes(v.region);
+  console.log(c.bold('\nPolicy  ') + c.dim('(structural caps — enforced at --go, fail-closed)'));
+  console.log(`  caps            maxFleet ${R.pol.maxFleet} · maxBatch ${R.pol.maxBatch} · budget $${R.pol.maxMonthlyBudgetUsd}/mo (declared; enforced via Azure Cost Mgmt)`);
+  console.log(`  fleet           ${R.fleet.length}/${R.pol.maxFleet} registered${R.fleet.length ? '  (' + R.fleet.join(', ') + ')' : ''}`);
+  console.log(`  region          ${v.region} ${regionOk ? c.green('(allowed)') : c.red('NOT allowed — allowedRegions: ' + (R.pol.allowedRegions || []).join(', '))}`);
+  console.log(`  gate            ${gate.ok ? c.green('PASS') : c.red('BLOCK — ' + gate.errors.join('; '))}`);
+  console.log(c.dim(`  policy          ${R.pol.source}`));
 }
 
 // Deterministic deploy env. The contract has already resolved every value
@@ -153,6 +172,16 @@ async function runUp(file, opts = {}) {
   if (R.giState === 'not-ignored') {
     console.log(c.red(`\nup --go ABORT — aegis.config.json is not gitignored; refusing to write a secret to a trackable file.`));
     return 1;
+  }
+
+  // Structural policy gate (maxFleet, maxBatch, region allowlist) — fail-closed,
+  // before anything is created. This is the account-protection layer.
+  const gate = policy.checkProvision(R.pol, { currentFleet: R.fleet, names: [v.name], region: v.region });
+  if (!gate.ok) {
+    console.log(c.red('\nup --go ABORT (nothing created) — blocked by fleet policy:'));
+    for (const e of gate.errors) console.log('  - ' + e);
+    console.log(c.dim(`  policy: ${R.pol.source}`));
+    return 2;
   }
 
   // Rebuild guard: a VM's cloud-init (osProfile.customData) is IMMUTABLE after
