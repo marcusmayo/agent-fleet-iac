@@ -9,3 +9,5 @@ agentfleet*
 
 # personal per-agent contracts (may contain your /32) - never committed
 agents/*.local.jsonc
+
+bicep/main.json
