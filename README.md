@@ -220,6 +220,112 @@ and Aegis can reach it. Start Aegis (`node aegis.js`) to see it in the console.
 The fully manual, step-by-step equivalent (for debugging or first-run understanding) is
 Parts 1–5 below.
 
+### Happy path — a fresh agent, start to finish
+
+This is the validated end-to-end sequence (run from the repo root, Windows PowerShell).
+
+1. **One-time environment** (per shell session). `up` needs these; it aborts loudly if any
+   is missing or still holds an angle-bracket placeholder:
+   ```powershell
+   $sec = Read-Host "Cloudflare API token" -AsSecureString
+   $env:CF_API_TOKEN      = [System.Net.NetworkCredential]::new('', $sec).Password
+   $env:CF_ACCOUNT_ID     = "<your Cloudflare account id>"
+   $env:CF_OPERATOR_EMAIL = "<your operator email>"
+   $env:SSH_PUBKEY        = Get-Content "$HOME\.ssh\keel_t2.pub" -Raw
+   $env:AEGIS_CONFIG      = "<path-to-your-aegis-repo>\aegis.config.json"
+   az login
+   ```
+   The **Cloudflare API token** must carry all five permissions or a step will 403:
+   Account · *Cloudflare Tunnel* · Edit; Account · *Access: Apps and Policies* · Edit;
+   Account · *Access: Service Tokens* · Edit; Account · *Access: Organizations, Identity
+   Providers, and Groups* · Edit; Zone · *DNS* · Edit (zone = your domain).
+   Also on PATH: `powershell`, **Git Bash** (`up` uses it, not WSL), and `az`.
+
+2. **Contract.** `agents/<name>.agent.jsonc` (see Step 1 earlier). Use `sshCidr: ""` for a
+   hardened, tunnel-only agent, or `"<your-ip>/32"` if you want to bootstrap over temp SSH.
+   For a throwaway you don't want committed, name it `<name>.local.jsonc` (gitignored).
+
+3. **Provision.** Preview, then execute:
+   ```powershell
+   node .\provision\bin\fleetctl.js up .\agents\<name>.agent.jsonc          # plan (no changes)
+   node .\provision\bin\fleetctl.js up .\agents\<name>.agent.jsonc --go      # execute
+   ```
+
+4. **Finish (runtime secrets).** cloud-init builds + brands the image (~4–8 min). Then:
+   ```powershell
+   .\scripts\ssh-open.ps1 -AgentName <name>      # prints the ssh command (temp NSG rule for your IP)
+   ```
+   On the VM — **wait for cloud-init to finish first**, then bootstrap from the repo dir:
+   ```bash
+   cloud-init status                             # expect: status: done
+   tail -n 3 /var/log/agent-image-build.log      # expect: BUILT <profile>:<sha>
+   grep agent_name ~/agent/system/agent.yaml     # expect: agent_name: "<name>"  (brand)
+   cd ~/agent && bash infra/scripts/bootstrap.sh # prompts for TOTP + model keys; starts the stack
+   sudo docker ps                                # expect the webchat container Up
+   exit
+   ```
+   ```powershell
+   .\scripts\ssh-close.ps1 -AgentName <name>     # back to zero inbound
+   ```
+
+5. **Verify + see it in Aegis.**
+   ```powershell
+   node .\provision\bin\fleetctl.js check .\agents\<name>.agent.jsonc --live   # expect HTTP 200
+   ```
+   Open `https://<name>.<domain>` (one-time PIN to your email) — the brand reads **<name>**.
+   In Aegis, click **Refresh fleet** (re-reads `aegis.config.json` live) and the agent appears.
+
+6. **Decommission** (deletes the Azure resource group and everything in it):
+   ```powershell
+   az group delete --name rg-<name> --yes        # blocks until deleted; verify: az group exists -n rg-<name>
+   ```
+   Then in Cloudflare delete the service token `aegis-<name>`, the Access app `<name>`, the
+   tunnel `<name>`, and the `<name>` DNS record; and remove the `<name>` entry from
+   `aegis.config.json` (Refresh fleet to update the panel).
+
+### Keel vs Castor
+
+The profile is a single contract field — `"profile": "keel"` or `"profile": "castor"` — and
+the same `up` runbook drives both. What differs:
+
+| | Keel | Castor |
+| --- | --- | --- |
+| default build repo | `keel-portfolio-management` | `castor` |
+| Azure extras | VM only | + per-agent **Key Vault**, user-assigned **managed identity**, blob **backup** (the `wantsVault` branch in `vm.bicep`) |
+| deployer object id | not needed | resolved (`az ad signed-in-user show`) for the Key Vault Secrets Officer grant |
+| bootstrap secrets | TOTP + Anthropic key | TOTP + model/vision keys (LiteLLM/OpenRouter) |
+
+So a Castor agent is just `up .\agents\<name>.agent.jsonc --go` with `profile: castor`; the
+extra vault/identity resources and the `castor.bicepparam` selection happen automatically.
+
+### Operational notes (learned the hard way)
+
+- **A VM's cloud-init (`customData`) is immutable.** You cannot "redeploy over" an existing
+  agent VM to change its cloud-init — `up` aborts if `rg-<name>` already exists. To rebuild,
+  `az group delete --name rg-<name> --yes`, wait for `az group exists` to print `false`, then
+  re-run. `--update` is only for in-place changes that don't touch cloud-init.
+- **Empty ≠ absent for env vars.** `up` passes the *resolved* `REPO_URL` explicitly; a
+  present-but-empty value would make the bicepparam skip its default and cloud-init run
+  `git clone ''`. `@minLength(1)` on `repoUrl` now fails such a deploy at submit time.
+- **Don't type raw `bash scripts/...` at the PowerShell prompt** — on Windows `bash` resolves
+  to the System32 WSL launcher, which fails if no distro is installed. `up` calls Git Bash
+  directly; for one-off `.sh` runs use `& "C:\Program Files\Git\bin\bash.exe" <script>`, or the
+  `az`/PowerShell equivalent (e.g. `az group delete` instead of `decommission.sh`).
+- **A 502 at `<name>.<domain>` means the tunnel is up but nothing is listening on 8443 yet** —
+  cloud-init/build not finished, or bootstrap not run. A dead tunnel gives 530 instead.
+- **`build-image.sh` and cloud-init:** the build script defaults `NOCACHE` to empty
+  (`${NOCACHE:-}`) so it runs under cloud-init's `set -u`; pass `NOCACHE=--no-cache` only for a
+  manual no-cache rebuild.
+
+### Roadmap — Aegis-driven provisioning (next)
+
+Today provisioning runs from the workstation CLI; Aegis only relays to live agents. The next
+milestone is driving the whole lifecycle — provision (Keel/Castor), refresh, and decommission —
+**from the Aegis panel**, with in-browser prompts for the minimum required inputs, a
+fire-and-forget spinner with loud failure, and agents that come up fully configured from
+vault-stored secrets (no interactive SSH bootstrap). That moves the Cloudflare token and Azure
+credential onto the Aegis host (the deferred "approach-B" seam), so it's scoped as its own build.
+
 ---
 
 ## Part 1 — stand up your **Castor-profile agent**
