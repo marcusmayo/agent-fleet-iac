@@ -59,8 +59,17 @@ function upsertAgent(data, entry) {
   return 'added';
 }
 
+// Remove the entry with a matching name. Never touches other agents.
+// Returns 'removed' | 'absent'.
+function removeAgent(data, name) {
+  const i = data.agents.findIndex((a) => a && a.name === name);
+  if (i < 0) return 'absent';
+  data.agents.splice(i, 1);
+  return 'removed';
+}
+
 function save(configPath, data) {
   fs.writeFileSync(configPath, JSON.stringify(data, null, 2) + '\n', 'utf8');
 }
 
-module.exports = { resolveConfigPath, gitignoreState, load, upsertAgent, save };
+module.exports = { resolveConfigPath, gitignoreState, load, upsertAgent, removeAgent, save };

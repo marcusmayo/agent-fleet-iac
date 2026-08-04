@@ -19,6 +19,18 @@ test('upsertAgent adds a new agent', () => {
   assert.strictEqual(data.agents[0].name, 'bosun');
 });
 
+test('removeAgent removes by name and preserves others; absent is a no-op', () => {
+  const data = { agents: [
+    { name: 'heimdall', profile: 'castor', host: 'h', clientId: 'h1', clientSecret: 'h2' },
+    { name: 'example-01', profile: 'keel', host: 'e', clientId: 'e1', clientSecret: 'e2' },
+  ] };
+  assert.strictEqual(cfg.removeAgent(data, 'example-01'), 'removed');
+  assert.strictEqual(data.agents.length, 1);
+  assert.strictEqual(data.agents[0].name, 'heimdall');       // other agent untouched
+  assert.strictEqual(cfg.removeAgent(data, 'example-01'), 'absent'); // idempotent
+  assert.strictEqual(data.agents.length, 1);
+});
+
 test('upsertAgent updates in place and never duplicates or clobbers others', () => {
   const data = { agents: [
     { name: 'heimdall', profile: 'castor', host: 'heimdall.keel-pm.com', clientId: 'h1', clientSecret: 'h2' },

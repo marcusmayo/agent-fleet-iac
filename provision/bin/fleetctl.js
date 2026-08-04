@@ -2,7 +2,7 @@
 'use strict';
 const { runCheck } = require('../lib/check');
 const { runPlan } = require('../lib/plan');
-const { runRegister } = require('../lib/register');
+const { runRegister, runDeregister } = require('../lib/register');
 const { runCheckLive } = require('../lib/live');
 const { runUp } = require('../lib/up');
 const { c } = require('../lib/util');
@@ -14,6 +14,7 @@ Usage:
   fleetctl plan     <contract.agent.jsonc> [--require-whatif]
   fleetctl up       <contract.agent.jsonc> [--go] [--aegis-config <path>]
   fleetctl register <contract.agent.jsonc> [--aegis-config <path>]
+  fleetctl deregister <name | contract.agent.jsonc> [--aegis-config <path>]
   fleetctl --help
 
 Commands:
@@ -43,6 +44,9 @@ Commands:
             refuses if that file is not gitignored). Service-token credentials come
             from \$AEGIS_CLIENT_ID + \$AEGIS_CLIENT_SECRET (or from \`up\`, in-process) —
             never from CLI flags. The secret is written to the config, never printed.
+
+  deregister  Remove an agent's entry from aegis.config.json (by name or contract) so
+            Aegis self-updates on decommission. Idempotent; never touches other agents.
 
   --aegis-config <path>   Path to aegis.config.json (else \$AEGIS_CONFIG, \$AEGIS_DIR,
                           or <fleet-parent>/aegis/aegis.config.json).
@@ -91,6 +95,10 @@ async function main(argv) {
   if (cmd === 'register') {
     if (!file) { console.error(c.red('register: missing <contract.agent.jsonc>')); return 2; }
     return runRegister(file, { aegisConfig });
+  }
+  if (cmd === 'deregister') {
+    if (!file) { console.error(c.red('deregister: missing <name-or-contract>')); return 2; }
+    return runDeregister(file, { aegisConfig });
   }
   if (cmd === 'up') {
     if (!file) { console.error(c.red('up: missing <contract.agent.jsonc>')); return 2; }
