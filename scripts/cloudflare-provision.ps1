@@ -15,7 +15,8 @@ param(
   [ValidateSet("castor","keel","atlas")] [string] $AgentProfile = "keel",
   [int]    $WebchatPort = 8443,
   [string] $SessionDuration = "24h",
-  [string] $TokenOutFile = ""
+  [string] $TokenOutFile = "",
+  [switch] $EnableSsh
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,6 +25,7 @@ if (-not $env:CF_API_TOKEN) { throw "Set `$env:CF_API_TOKEN (Zero Trust + DNS ed
 $api  = "https://api.cloudflare.com/client/v4"
 $hdrs = @{ Authorization = "Bearer $($env:CF_API_TOKEN)"; "Content-Type" = "application/json" }
 $fqdn = "$AgentName.$Domain"
+$sshHost = "ssh-$AgentName.$Domain"
 
 function Invoke-CF {
   param([string]$Method, [string]$Path, $Body)
@@ -74,9 +76,11 @@ if ($existing) {
 $token = (Invoke-CF GET "/accounts/$AccountId/cfd_tunnel/$tunnelId/token").result
 
 $ingress = @( @{ hostname = $fqdn; service = "http://localhost:$WebchatPort" } )
+if ($EnableSsh) { $ingress += @{ hostname = $sshHost; service = "ssh://localhost:22" } }
 $ingress += @{ service = "http_status:404" }
 Invoke-CF PUT "/accounts/$AccountId/cfd_tunnel/$tunnelId/configurations" @{ config = @{ ingress = $ingress } } | Out-Null
 Write-Host "   ingress set: $fqdn -> http://localhost:$WebchatPort"
+if ($EnableSsh) { Write-Host "   ingress set: $sshHost -> ssh://localhost:22" }
 
 function Ensure-Cname {
   param([string]$Name)
@@ -92,6 +96,7 @@ function Ensure-Cname {
   }
 }
 Ensure-Cname $fqdn
+if ($EnableSsh) { Ensure-Cname $sshHost }
 
 function Ensure-AccessApp {
   param([string]$AppHost, [string]$AppName)
@@ -126,6 +131,7 @@ function Ensure-AccessApp {
   }
 }
 Ensure-AccessApp $fqdn $AgentName
+if ($EnableSsh) { Ensure-AccessApp $sshHost "$AgentName-ssh" }
 
 # For non-interactive callers (fleetctl up): emit the tunnel token to a file only
 # after every CF step above succeeded. The caller reads it, then deletes it.
@@ -141,3 +147,6 @@ Write-Host "    `$env:CF_TUNNEL_TOKEN = `"$token`""
 Write-Host "    bash scripts/deploy.sh $AgentProfile $AgentName"
 Write-Host ""
 Write-Host "After deploy + bootstrap, reach it at:  https://$fqdn" -ForegroundColor Green
+if ($EnableSsh) {
+  Write-Host "SSH over the tunnel (no public IP):     ./scripts/ssh-tunnel.ps1 -AgentName $AgentName" -ForegroundColor Green
+}
