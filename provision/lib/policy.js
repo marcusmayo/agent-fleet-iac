@@ -11,6 +11,7 @@ const DEFAULTS = {
   allowedRegions: ['eastus2'],
   defaultRegion: 'eastus2',
   maxMonthlyBudgetUsd: 150,
+  budgetName: 'fleet-monthly',
 };
 
 function resolvePolicyPath(explicit) {

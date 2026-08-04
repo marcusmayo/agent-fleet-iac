@@ -10,6 +10,7 @@ const pf = require('./preflight');
 const cf = require('./cfapi');
 const cfg = require('./aegisconfig');
 const policy = require('./policy');
+const budget = require('./budget');
 const { runRegister } = require('./register');
 
 const bad = (s) => !s || /[<>]/.test(s);                  // empty, or still a <placeholder>
@@ -92,7 +93,7 @@ function printPlan(v, R) {
   const gate = policy.checkProvision(R.pol, { currentFleet: R.fleet, names: [v.name], region: v.region });
   const regionOk = Array.isArray(R.pol.allowedRegions) && R.pol.allowedRegions.includes(v.region);
   console.log(c.bold('\nPolicy  ') + c.dim('(structural caps — enforced at --go, fail-closed)'));
-  console.log(`  caps            maxFleet ${R.pol.maxFleet} · maxBatch ${R.pol.maxBatch} · budget $${R.pol.maxMonthlyBudgetUsd}/mo (declared; enforced via Azure Cost Mgmt)`);
+  console.log(`  caps            maxFleet ${R.pol.maxFleet} · maxBatch ${R.pol.maxBatch} · budget $${R.pol.maxMonthlyBudgetUsd}/mo (enforced at --go vs Azure budget "${R.pol.budgetName}")`);
   console.log(`  fleet           ${R.fleet.length}/${R.pol.maxFleet} registered${R.fleet.length ? '  (' + R.fleet.join(', ') + ')' : ''}`);
   console.log(`  region          ${v.region} ${regionOk ? c.green('(allowed)') : c.red('NOT allowed — allowedRegions: ' + (R.pol.allowedRegions || []).join(', '))}`);
   console.log(`  gate            ${gate.ok ? c.green('PASS') : c.red('BLOCK — ' + gate.errors.join('; '))}`);
@@ -181,6 +182,16 @@ async function runUp(file, opts = {}) {
     console.log(c.red('\nup --go ABORT (nothing created) — blocked by fleet policy:'));
     for (const e of gate.errors) console.log('  - ' + e);
     console.log(c.dim(`  policy: ${R.pol.source}`));
+    return 2;
+  }
+
+  // Budget gate: refuse if month-to-date actual spend already meets/exceeds the
+  // declared budget. Unreadable spend warns (maxFleet still bounds count).
+  const bgate = budget.checkBudget(R.pol.maxMonthlyBudgetUsd, budget.readBudgetSpend(R.pol.budgetName));
+  console.log((bgate.warn ? c.yellow : c.dim)('\nbudget: ' + bgate.message));
+  if (!bgate.ok) {
+    console.log(c.red('\nup --go ABORT (nothing created) — over the monthly budget.'));
+    console.log(c.dim('  Raise maxMonthlyBudgetUsd in aegis.policy.jsonc, or wait for the next billing cycle.'));
     return 2;
   }
 

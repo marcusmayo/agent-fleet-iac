@@ -10,10 +10,12 @@
   "allowedRegions": ["eastus2"],   // agents may ONLY be stood up in these Azure regions
   "defaultRegion": "eastus2",      // region offered by the panel when a request omits one
 
-  // Declared monthly budget (USD). NOT enforced by a static projected-cost gate:
-  // the fleet deallocates between sessions, so real cost is runtime-driven and a
-  // per-agent estimate would be misleading. This budget is enforced against ACTUAL
-  // spend via Azure Cost Management (next step). Until then, maxFleet is the
-  // structural bound on how many agents (and therefore how much) can exist.
-  "maxMonthlyBudgetUsd": 150
+  // Declared monthly budget (USD), enforced against ACTUAL spend read from the
+  // Azure Cost Management budget named below (create it once — see the runbook).
+  // up --go blocks if month-to-date spend already meets/exceeds this; if the budget
+  // can't be read it warns and relies on maxFleet. The fleet deallocates between
+  // sessions, so this actual-spend gate is the meaningful budget control; maxFleet
+  // is the structural bound on agent count.
+  "maxMonthlyBudgetUsd": 150,
+  "budgetName": "fleet-monthly"
 }
