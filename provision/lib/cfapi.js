@@ -91,10 +91,65 @@ async function upsertServiceAuthPolicy(accountId, appId, policyName, tokenId, ap
   return existing ? 'updated' : 'created';
 }
 
+// --- Decommission (reverse-of-provision) --------------------------------------
+// The tunnel, DNS CNAME, and Access app are CREATED by cloudflare-provision.ps1;
+// the service token already had create/find/delete here. Deletes hit the same
+// endpoints the PS script + this module use to create, so there's no new contract.
+function reqListTunnels(accountId, name) {
+  return { method: 'GET', url: `${CF_API}/accounts/${accountId}/cfd_tunnel?name=${encodeURIComponent(name)}` };
+}
+function reqDeleteTunnel(accountId, id) {
+  return { method: 'DELETE', url: `${CF_API}/accounts/${accountId}/cfd_tunnel/${id}` };
+}
+function reqDeleteTunnelConnections(accountId, id) {
+  return { method: 'DELETE', url: `${CF_API}/accounts/${accountId}/cfd_tunnel/${id}/connections` };
+}
+function reqListZones(name) {
+  return { method: 'GET', url: `${CF_API}/zones?name=${encodeURIComponent(name)}` };
+}
+function reqListDnsRecords(zoneId, name) {
+  return { method: 'GET', url: `${CF_API}/zones/${zoneId}/dns_records?name=${encodeURIComponent(name)}` };
+}
+function reqDeleteDnsRecord(zoneId, id) {
+  return { method: 'DELETE', url: `${CF_API}/zones/${zoneId}/dns_records/${id}` };
+}
+function reqDeleteApp(accountId, id) {
+  return { method: 'DELETE', url: `${CF_API}/accounts/${accountId}/access/apps/${id}` };
+}
+
+async function findTunnelByName(accountId, name, apiToken) {
+  const tuns = await cfExec(reqListTunnels(accountId, name), apiToken);
+  return (tuns || []).find((t) => t.name === name && !t.deleted_at) || null;
+}
+async function deleteTunnel(accountId, id, apiToken) {
+  // A tunnel with live connections refuses deletion; clean stale connections first
+  // (no-op if none — the RG/VM should already be gone), then delete the tunnel.
+  try { await cfExec(reqDeleteTunnelConnections(accountId, id), apiToken); } catch { /* none to clean */ }
+  await cfExec(reqDeleteTunnel(accountId, id), apiToken);
+}
+async function findZoneIdByName(name, apiToken) {
+  const zones = await cfExec(reqListZones(name), apiToken);
+  const z = (zones || []).find((zz) => zz.name === name) || (zones || [])[0];
+  return z ? z.id : null;
+}
+async function findDnsRecordByHostname(zoneId, hostname, apiToken) {
+  const recs = await cfExec(reqListDnsRecords(zoneId, hostname), apiToken);
+  return (recs || []).find((r) => r.type === 'CNAME' && r.name === hostname) || null;
+}
+async function deleteDnsRecord(zoneId, id, apiToken) {
+  await cfExec(reqDeleteDnsRecord(zoneId, id), apiToken);
+}
+async function deleteApp(accountId, id, apiToken) {
+  await cfExec(reqDeleteApp(accountId, id), apiToken);
+}
+
 module.exports = {
   CF_API,
   reqCreateServiceToken, reqListServiceTokens, reqDeleteServiceToken, reqRotateServiceToken,
   reqListApps, reqListPolicies, reqServiceAuthPolicy,
+  reqListTunnels, reqDeleteTunnel, reqDeleteTunnelConnections,
+  reqListZones, reqListDnsRecords, reqDeleteDnsRecord, reqDeleteApp,
   cfExec, createServiceToken, findServiceTokenByName, deleteServiceToken, rotateServiceToken,
   findAppByHostname, upsertServiceAuthPolicy,
+  findTunnelByName, deleteTunnel, findZoneIdByName, findDnsRecordByHostname, deleteDnsRecord, deleteApp,
 };

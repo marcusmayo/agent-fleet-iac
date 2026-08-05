@@ -6,6 +6,7 @@ const { runRegister, runDeregister } = require('../lib/register');
 const { runSetSecrets } = require('../lib/secrets');
 const { runCheckLive } = require('../lib/live');
 const { runUp } = require('../lib/up');
+const { runDecommission } = require('../lib/decommission');
 const { c } = require('../lib/util');
 
 const HELP = `fleetctl — agent-fleet provisioning
@@ -16,6 +17,7 @@ Usage:
   fleetctl up       <contract.agent.jsonc> [--go] [--aegis-config <path>]
   fleetctl register <contract.agent.jsonc> [--aegis-config <path>]
   fleetctl deregister <name | contract.agent.jsonc> [--aegis-config <path>]
+  fleetctl decommission <contract.agent.jsonc> [--go] [--aegis-config <path>]
   fleetctl set-secrets <agent>
   fleetctl --help
 
@@ -114,6 +116,10 @@ async function main(argv) {
   if (cmd === 'up') {
     if (!file) { console.error(c.red('up: missing <contract.agent.jsonc>')); return 2; }
     return runUp(file, { go: flags.has('--go'), update: flags.has('--update'), aegisConfig });
+  }
+  if (cmd === 'decommission') {
+    if (!file) { console.error(c.red('decommission: missing <contract.agent.jsonc>')); return 2; }
+    return runDecommission(file, { go: flags.has('--go'), aegisConfig });
   }
 
   console.error(c.red(`unknown command "${cmd}"`) + '\n');
