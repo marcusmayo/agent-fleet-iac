@@ -114,8 +114,11 @@ function runChatTurn({ prompt, model, cwd, stateDir, env }, onEvent, onDone) {
   const directModel = (baseEnv.WEB_DIRECT_MODEL || '').trim();
   if (webEnabled && directModel) {
     runEnv = { ...baseEnv };
-    delete runEnv.ANTHROPIC_BASE_URL;          // -> api.anthropic.com (bypass the gateway)
-    delete runEnv.ANTHROPIC_SMALL_FAST_MODEL;  // gateway alias name is invalid at Anthropic; use the CLI default
+    delete runEnv.ANTHROPIC_BASE_URL;          // main + aux -> api.anthropic.com (bypass the gateway)
+    // The gateway small-fast alias (claude-haiku-4.5) is invalid at Anthropic, and the CLI's default
+    // aux model isn't guaranteed reachable; pin a real dated Anthropic haiku so the CLI's aux/background
+    // calls resolve on the direct route too. Overridable per-agent via WEB_DIRECT_SMALL_FAST_MODEL.
+    runEnv.ANTHROPIC_SMALL_FAST_MODEL = (baseEnv.WEB_DIRECT_SMALL_FAST_MODEL || 'claude-haiku-4-5-20251001').trim();
     const directKey = (baseEnv.WEB_DIRECT_KEY || '').trim();
     if (directKey) runEnv.ANTHROPIC_API_KEY = directKey;
     runModel = directModel;                    // a real Anthropic model id (gateway slugs aren't valid direct)
