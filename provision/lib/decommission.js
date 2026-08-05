@@ -122,7 +122,10 @@ async function runDecommission(file, opts = {}) {
   if (!anything) { console.log(c.green('\nNothing to decommission — every surface is already absent.')); return 0; }
 
   if (!opts.go) {
-    console.log(c.dim('\nPlan only — nothing deleted. Re-run with --go to execute the teardown above.'));
+    console.log(c.dim('\nPlan only — nothing deleted.'));
+    console.log(c.yellow('  To EXECUTE (DESTRUCTIVE — deletes every DELETE surface above): re-run the SAME command'));
+    console.log(c.yellow('  with the --go flag appended at the end, e.g.  fleetctl decommission ' + file + ' --go'));
+    console.log(c.dim('  (--go is a flag; the agent is the contract file above, not a word typed after --go.)'));
     return 0;
   }
 
