@@ -33,6 +33,13 @@ async function discover(file, d, accountId, cfToken, aegisConfig) {
     s.app = await cf.findAppByHostname(accountId, fqdn, cfToken);
     s.zoneId = await cf.findZoneIdByName(domain, cfToken);
     s.dns = s.zoneId ? await cf.findDnsRecordByHostname(s.zoneId, fqdn, cfToken) : null;
+    // Legacy hand-built agents (pre-fleetctl) also carried an ssh-<name> tunnel hostname
+    // (+ sometimes an Access app on it). Modern `up` builds are tunnel-only and never create
+    // these, so this discovery is a no-op for fleet-provisioned agents -- but sweeping them
+    // here means ONE decommission run leaves zero Cloudflare residue either way.
+    s.sshFqdn = 'ssh-' + name + '.' + domain;
+    s.appSsh = await cf.findAppByHostname(accountId, s.sshFqdn, cfToken);
+    s.dnsSsh = s.zoneId ? await cf.findDnsRecordByHostname(s.zoneId, s.sshFqdn, cfToken) : null;
   } catch (e) {
     s.cfErr = e.message;
   }
@@ -60,6 +67,11 @@ function printPlan(s) {
   console.log(`  5 CF service token   ${s.token ? del(s.token.id) : gone('aegis-' + s.name)}`);
   console.log(`  6 CF DNS (CNAME)     ${s.dns ? del(s.fqdn) : gone(s.fqdn)}`);
   console.log(`  7 CF tunnel          ${s.tunnel ? del(s.tunnel.id) : gone(s.name)}`);
+  if (s.appSsh || s.dnsSsh) {
+    console.log(c.dim('  legacy ssh leftovers (hand-built era):'));
+    if (s.appSsh) console.log(`  +  CF Access app     ${del(s.sshFqdn)}`);
+    if (s.dnsSsh) console.log(`  +  CF DNS (ssh)      ${del(s.sshFqdn)}`);
+  }
   if (s.cfErr) console.log(c.red(`  ! Cloudflare query error (CF surfaces may be incomplete): ${s.cfErr}`));
 }
 
@@ -87,6 +99,7 @@ async function execute(file, d, accountId, cfToken, aegisConfig, s) {
   // 4. CF Access app (removes its policies -> frees the service token)
   if (s.app) { try { await cf.deleteApp(accountId, s.app.id, cfToken); ok('CF Access app: deleted'); } catch (e) { fail('CF Access app delete', e); } }
   else skip('CF Access app');
+  if (s.appSsh) { try { await cf.deleteApp(accountId, s.appSsh.id, cfToken); ok('CF Access app (ssh, legacy): deleted'); } catch (e) { fail('CF Access app (ssh) delete', e); } }
 
   // 5. CF service token (now unreferenced)
   if (s.token) { try { await cf.deleteServiceToken(accountId, s.token.id, cfToken); ok('CF service token: deleted'); } catch (e) { fail('CF service token delete', e); } }
@@ -95,6 +108,7 @@ async function execute(file, d, accountId, cfToken, aegisConfig, s) {
   // 6. CF DNS CNAME
   if (s.dns && s.zoneId) { try { await cf.deleteDnsRecord(s.zoneId, s.dns.id, cfToken); ok('CF DNS CNAME: deleted'); } catch (e) { fail('CF DNS delete', e); } }
   else skip('CF DNS CNAME');
+  if (s.dnsSsh && s.zoneId) { try { await cf.deleteDnsRecord(s.zoneId, s.dnsSsh.id, cfToken); ok('CF DNS (ssh-' + s.name + ', legacy): deleted'); } catch (e) { fail('CF DNS (ssh) delete', e); } }
 
   // 7. CF tunnel (connector dead after the RG delete)
   if (s.tunnel) { try { await cf.deleteTunnel(accountId, s.tunnel.id, cfToken); ok('CF tunnel: deleted'); } catch (e) { fail('CF tunnel delete', e); } }
@@ -118,7 +132,7 @@ async function runDecommission(file, opts = {}) {
   const s = await discover(file, d, accountId, cfToken, aegisPath);
   printPlan(s);
 
-  const anything = s.aegis || s.localFile || s.rg || s.app || s.token || s.dns || s.tunnel;
+  const anything = s.aegis || s.localFile || s.rg || s.app || s.token || s.dns || s.tunnel || s.appSsh || s.dnsSsh;
   if (!anything) { console.log(c.green('\nNothing to decommission — every surface is already absent.')); return 0; }
 
   if (!opts.go) {
