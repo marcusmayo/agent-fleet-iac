@@ -58,4 +58,4 @@ function runSetSecrets(agent) {
   return 0;
 }
 
-module.exports = { base32, genTotp, resolveVault, setSecret, runSetSecrets };
+module.exports = { resolveVault, setSecret, runSetSecrets };
