@@ -23,7 +23,13 @@ function runCapture(cmd, args, opts = {}) {
   const cmdShim = process.platform === 'win32' && /^(az|npm|npx|yarn|pnpm)$/i.test(cmd);
   const { shell: shellOverride, ...rest } = opts;
   const shell = shellOverride !== undefined ? shellOverride : cmdShim;
-  const r = spawnSync(cmd, args, { encoding: 'utf8', shell, ...rest });
+  // When shelling (win32 .cmd shims), pass ONE pre-quoted command string -- the args-array +
+  // shell:true form is deprecated (DEP0190) because Node only concatenates. Quote any arg with
+  // whitespace/metacharacters; our az args are hardcoded/regex-constrained so this is exact.
+  const winq = (a) => (/[\s"&|<>^%()]/.test(a) ? '"' + String(a).replace(/"/g, '\\"') + '"' : a);
+  const r = shell
+    ? spawnSync([cmd, ...args.map(winq)].join(' '), { encoding: 'utf8', shell: true, ...rest })
+    : spawnSync(cmd, args, { encoding: 'utf8', ...rest });
   return {
     ok: !r.error && r.status === 0,
     status: r.status,

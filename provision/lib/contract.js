@@ -17,8 +17,10 @@ const DEFAULT_REGION = 'eastus2';
 
 // Per-profile default build repo — mirrors the defaults in the bicepparam files.
 const PROFILE_REPO = {
-  castor: 'https://github.com/marcusmayo/castor.git',
-  keel: 'https://github.com/marcusmayo/keel-portfolio-management.git',
+  // Forkable: FLEET_REPO_ORG swaps the GitHub org for the per-profile defaults; a contract's
+  // explicit "repoUrl" field still overrides everything (any https .git URL).
+  castor: `https://github.com/${process.env.FLEET_REPO_ORG || 'marcusmayo'}/castor.git`,
+  keel: `https://github.com/${process.env.FLEET_REPO_ORG || 'marcusmayo'}/keel-portfolio-management.git`,
 };
 
 // Matches deploy.sh, cloudflare-provision.ps1, and main.bicep (2-24, lowercase,
