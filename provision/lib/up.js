@@ -48,7 +48,7 @@ function gather(v, opts) {
     az: which('az'),
     cfToken: process.env.CF_API_TOKEN || '',
     accountId: process.env.CF_ACCOUNT_ID || '',
-    operatorEmail: process.env.CF_OPERATOR_EMAIL || '',
+    operatorEmail: (v.operatorEmail || process.env.CF_OPERATOR_EMAIL || '').trim(),   // contract field wins (per-agent)
   };
 }
 

@@ -34,7 +34,7 @@ const REGION_RE = /^[a-z]+[a-z0-9]*$/;
 
 const ALLOWED_KEYS = new Set([
   'contract', 'name', 'profile', 'domain',
-  'webchatPort', 'region', 'sshCidr', 'repoUrl', 'repoRef',
+  'webchatPort', 'region', 'sshCidr', 'repoUrl', 'repoRef', 'operatorEmail',
 ]);
 
 // Keys that smell like a secret or key material must never live in the (committed)
@@ -148,6 +148,15 @@ function validateContract(raw) {
     }
   }
 
+  // operatorEmail (optional; per-agent Access login email — overrides the fleet default
+  // from aegis.config.json / $CF_OPERATOR_EMAIL at up-time; secret-free so it may live here)
+  let operatorEmail = '';
+  if ('operatorEmail' in raw && raw.operatorEmail !== '') {
+    if (typeof raw.operatorEmail !== 'string' || /[<>\s]/.test(raw.operatorEmail) || !raw.operatorEmail.includes('@')) {
+      errors.push(`"operatorEmail" must be a plain email address (got ${JSON.stringify(raw.operatorEmail)})`);
+    } else { operatorEmail = raw.operatorEmail; }
+  }
+
   if (errors.length) return { ok: false, errors, warnings, value: null };
 
   if (repoUrlIsDefault) repoUrl = PROFILE_REPO[raw.profile];
@@ -163,6 +172,7 @@ function validateContract(raw) {
     repoUrl,
     repoUrlIsDefault,
     repoRef,
+    operatorEmail,
   };
   return { ok: true, errors, warnings, value };
 }
