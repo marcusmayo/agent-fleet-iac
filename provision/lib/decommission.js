@@ -101,8 +101,21 @@ async function execute(file, d, accountId, cfToken, aegisConfig, s) {
   else skip('CF Access app');
   if (s.appSsh) { try { await cf.deleteApp(accountId, s.appSsh.id, cfToken); ok('CF Access app (ssh, legacy): deleted'); } catch (e) { fail('CF Access app (ssh) delete', e); } }
 
-  // 5. CF service token (now unreferenced)
-  if (s.token) { try { await cf.deleteServiceToken(accountId, s.token.id, cfToken); ok('CF service token: deleted'); } catch (e) { fail('CF service token delete', e); } }
+  // 5. CF service token (now unreferenced). CF can return 12139 (token in use) if the
+  // just-deleted app's Service-Auth policy hasn't propagated yet -- retry with backoff.
+  // A 12139 that survives the retries means a legacy standalone policy/group still
+  // references it (hand-built era): remove that reference in the CF dashboard, re-run.
+  if (s.token) {
+    let done = false, lastErr = null;
+    for (let i = 0; i < 3 && !done; i++) {
+      if (i) await new Promise((r) => setTimeout(r, 4000));
+      try {
+        await cf.deleteServiceToken(accountId, s.token.id, cfToken);
+        done = true; ok('CF service token: deleted' + (i ? ` (retry ${i})` : ''));
+      } catch (e) { lastErr = e; }
+    }
+    if (!done) fail('CF service token delete (after retries — a legacy policy/group may still reference it; remove it in the CF dashboard, then re-run)', lastErr);
+  }
   else skip('CF service token');
 
   // 6. CF DNS CNAME
