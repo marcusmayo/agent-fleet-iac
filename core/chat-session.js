@@ -96,10 +96,23 @@ function isMissingSessionError(stderr) {
   return /no\s+(conversation|session)[^.]*found|session[^.]*not\s+found|could not.*resume/i.test(String(stderr || ''));
 }
 
+// Did the API reject a RESUMED transcript at request validation? Happens when a session
+// authored via the gateway (OpenRouter models / canned tool-failure turns can leave empty
+// text blocks in the transcript) is replayed against the strict direct Anthropic API:
+// every resumed turn 400s regardless of the new prompt. Recovery = drop the stored
+// session and rerun the turn fresh.
+function isSessionIncompatError(text) {
+  return /content blocks must be non-empty|must have non-empty content/i.test(String(text || ''));
+}
+
 // Run one chat turn. onEvent(parsedStreamJsonObject) per line; onDone(code, stderr) at close.
-// Returns the child process (so the caller can kill it on client disconnect).
+// Returns the FIRST child process (so the caller can kill it on client disconnect).
+// If a RESUMED turn is rejected by request validation (isSessionIncompatError -- a
+// gateway-era transcript replayed against the strict direct API), the stored session is
+// dropped and the turn retried ONCE on a fresh session; the retry streams through the
+// same onEvent/onDone. (On client disconnect mid-retry the retry child finishes orphaned;
+// its events are swallowed by the try/catch around the callbacks -- bounded and harmless.)
 function runChatTurn({ prompt, model, cwd, stateDir, env }, onEvent, onDone) {
-  const resumeId = readSessionId(stateDir);
   const persona = readPersona(cwd, stateDir);
   const webEnabled = readWebAccess(stateDir);
   const baseEnv = env || process.env;
@@ -124,33 +137,59 @@ function runChatTurn({ prompt, model, cwd, stateDir, env }, onEvent, onDone) {
     runModel = directModel;                    // a real Anthropic model id (gateway slugs aren't valid direct)
   }
 
-  const args = buildArgs({ prompt, model: runModel, sessionId: resumeId, persona, webEnabled });
-  const child = spawn('claude', args, { cwd, env: runEnv });
+  const start = (sessionId, canRetry) => {
+    const args = buildArgs({ prompt, model: runModel, sessionId, persona, webEnabled });
+    const child = spawn('claude', args, { cwd, env: runEnv });
 
-  const rl = readline.createInterface({ input: child.stdout });
-  rl.on('line', (line) => {
-    let evt;
-    try { evt = JSON.parse(line); } catch { return; }
-    // Starting fresh (no stored id yet): capture and persist the new session id.
-    if (!resumeId) { const sid = eventSessionId(evt); if (sid) writeSessionId(stateDir, sid); }
-    try { onEvent(evt); } catch { /* caller error shouldn't kill the stream */ }
-  });
+    let stderr = '', apiErr = '', sawText = false, textBuf = '';
+    const rl = readline.createInterface({ input: child.stdout });
+    rl.on('line', (line) => {
+      let evt;
+      try { evt = JSON.parse(line); } catch { return; }
+      // Starting fresh (no stored id yet): capture and persist the new session id.
+      if (!sessionId) { const sid = eventSessionId(evt); if (sid) writeSessionId(stateDir, sid); }
+      if (evt.type === 'assistant' && evt.message && Array.isArray(evt.message.content)) {
+        for (const b of evt.message.content) {
+          if (b && b.type === 'text' && b.text) { sawText = true; if (textBuf.length < 1200) textBuf += b.text; }
+        }
+      }
+      if (evt.type === 'result' && evt.is_error) apiErr += ' ' + String(evt.result || '');
+      try { onEvent(evt); } catch { /* caller error shouldn't kill the stream */ }
+    });
 
-  let stderr = '';
-  child.stderr.on('data', (d) => { stderr += d.toString(); });
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
 
-  child.on('close', (code) => {
-    // Stored id but resume failed -> transcript is gone; forget it so next turn starts fresh.
-    if (code !== 0 && resumeId && isMissingSessionError(stderr)) clearSessionId(stateDir);
-    try { onDone(code, stderr, { resumed: !!resumeId }); } catch { /* ignore */ }
-  });
+    child.on('close', (code) => {
+      // The CLI surfaces an API rejection either as a result error event OR streamed as a bare
+      // assistant text line ("API Error: 400 ..."), often with exit code 0 -- so the streamed
+      // text is part of the error evidence, and a bare API-error line counts as "nothing real
+      // streamed" for the retry guard (a genuine answer that merely QUOTES the phrase is long
+      // and doesn't start with "API Error:", so it never triggers recovery).
+      const errAll = apiErr + ' ' + stderr + ' ' + textBuf;
+      const bareApiError = sawText && textBuf.trim().length < 600 && /^API Error:\s*4\d\d/i.test(textBuf.trim());
+      // Stored id but the session itself is gone -> forget it so the next turn starts fresh.
+      if (sessionId && isMissingSessionError(errAll)) clearSessionId(stateDir);
+      // Resumed transcript rejected by request validation -> drop it, retry ONCE fresh.
+      if (canRetry && sessionId && (!sawText || bareApiError) && isSessionIncompatError(errAll)) {
+        clearSessionId(stateDir);
+        try { onEvent({ type: 'system', subtype: 'session_restart', note: 'stored conversation incompatible with this route; starting fresh' }); } catch { /* ignore */ }
+        try { onEvent({ type: 'assistant', message: { content: [{ type: 'text', text: '\n[stored conversation was incompatible with this route -- restarting fresh]\n' }] } }); } catch { /* ignore */ }
+        const retry = start(null, false);
+        retry.on('error', (e) => { try { onDone(1, 'retry spawn failed: ' + e.message, { resumed: false }); } catch { /* ignore */ } });
+        return; // the retry owns onDone
+      }
+      try { onDone(code, stderr, { resumed: !!sessionId }); } catch { /* ignore */ }
+    });
 
-  return child;
+    return child;
+  };
+
+  return start(readSessionId(stateDir), true);
 }
 
 module.exports = {
   runChatTurn, buildArgs, readSessionId, writeSessionId, clearSessionId,
-  sessionFile, eventSessionId, isMissingSessionError,
+  sessionFile, eventSessionId, isMissingSessionError, isSessionIncompatError,
   readPersona, defaultPersona, writePersona, clearPersona, hasPersonaOverride, personaFile,
   readWebAccess, writeWebAccess, webAccessFile,
 };
