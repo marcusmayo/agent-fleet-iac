@@ -40,6 +40,15 @@ async function discover(file, d, accountId, cfToken, aegisConfig) {
     s.sshFqdn = 'ssh-' + name + '.' + domain;
     s.appSsh = await cf.findAppByHostname(accountId, s.sshFqdn, cfToken);
     s.dnsSsh = s.zoneId ? await cf.findDnsRecordByHostname(s.zoneId, s.sshFqdn, cfToken) : null;
+    // Legacy account-level REUSABLE policies (hand-built era): fleetctl-provisioned apps use
+    // INLINE policies that die with the app, but the original agents' reusable policies
+    // survive app deletion and keep the service token "in use" (CF 12139). Sweep any that
+    // reference this agent's token, plus the agent's <name>-operator allow policy.
+    s.policies = [];
+    try {
+      const all = await cf.listReusablePolicies(accountId, cfToken);
+      s.policies = (all || []).filter((p) => (s.token && JSON.stringify(p).includes(s.token.id)) || p.name === name + '-operator');
+    } catch { /* older accounts / perms: skip quietly */ }
   } catch (e) {
     s.cfErr = e.message;
   }
@@ -67,10 +76,11 @@ function printPlan(s) {
   console.log(`  5 CF service token   ${s.token ? del(s.token.id) : gone('aegis-' + s.name)}`);
   console.log(`  6 CF DNS (CNAME)     ${s.dns ? del(s.fqdn) : gone(s.fqdn)}`);
   console.log(`  7 CF tunnel          ${s.tunnel ? del(s.tunnel.id) : gone(s.name)}`);
-  if (s.appSsh || s.dnsSsh) {
-    console.log(c.dim('  legacy ssh leftovers (hand-built era):'));
+  if (s.appSsh || s.dnsSsh || (s.policies && s.policies.length)) {
+    console.log(c.dim('  legacy leftovers (hand-built era):'));
     if (s.appSsh) console.log(`  +  CF Access app     ${del(s.sshFqdn)}`);
     if (s.dnsSsh) console.log(`  +  CF DNS (ssh)      ${del(s.sshFqdn)}`);
+    for (const p of (s.policies || [])) console.log(`  +  CF reusable policy ${del(`"${p.name}" ${p.id}`)}`);
   }
   if (s.cfErr) console.log(c.red(`  ! Cloudflare query error (CF surfaces may be incomplete): ${s.cfErr}`));
 }
@@ -100,6 +110,10 @@ async function execute(file, d, accountId, cfToken, aegisConfig, s) {
   if (s.app) { try { await cf.deleteApp(accountId, s.app.id, cfToken); ok('CF Access app: deleted'); } catch (e) { fail('CF Access app delete', e); } }
   else skip('CF Access app');
   if (s.appSsh) { try { await cf.deleteApp(accountId, s.appSsh.id, cfToken); ok('CF Access app (ssh, legacy): deleted'); } catch (e) { fail('CF Access app (ssh) delete', e); } }
+  for (const p of (s.policies || [])) {
+    try { await cf.deleteReusablePolicy(accountId, p.id, cfToken); ok(`CF reusable policy (legacy): deleted "${p.name}"`); }
+    catch (e) { fail(`CF reusable policy delete ("${p.name}")`, e); }
+  }
 
   // 5. CF service token (now unreferenced). CF can return 12139 (token in use) if the
   // just-deleted app's Service-Auth policy hasn't propagated yet -- retry with backoff.
@@ -145,7 +159,7 @@ async function runDecommission(file, opts = {}) {
   const s = await discover(file, d, accountId, cfToken, aegisPath);
   printPlan(s);
 
-  const anything = s.aegis || s.localFile || s.rg || s.app || s.token || s.dns || s.tunnel || s.appSsh || s.dnsSsh;
+  const anything = s.aegis || s.localFile || s.rg || s.app || s.token || s.dns || s.tunnel || s.appSsh || s.dnsSsh || (s.policies && s.policies.length);
   if (!anything) { console.log(c.green('\nNothing to decommission — every surface is already absent.')); return 0; }
 
   if (!opts.go) {

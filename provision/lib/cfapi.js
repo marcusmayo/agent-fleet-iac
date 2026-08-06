@@ -26,6 +26,14 @@ function reqRotateServiceToken(accountId, id) {
 function reqListApps(accountId) {
   return { method: 'GET', url: `${CF_API}/accounts/${accountId}/access/apps` };
 }
+// Account-level REUSABLE policies (distinct from per-app policies below): the hand-built
+// agents used these, and they survive app deletion -- decommission sweeps the leftovers.
+function reqListReusablePolicies(accountId) {
+  return { method: 'GET', url: `${CF_API}/accounts/${accountId}/access/policies?per_page=100` };
+}
+function reqDeleteReusablePolicy(accountId, id) {
+  return { method: 'DELETE', url: `${CF_API}/accounts/${accountId}/access/policies/${id}` };
+}
 function reqListPolicies(accountId, appId) {
   return { method: 'GET', url: `${CF_API}/accounts/${accountId}/access/apps/${appId}/policies` };
 }
@@ -142,6 +150,12 @@ async function deleteDnsRecord(zoneId, id, apiToken) {
 async function deleteApp(accountId, id, apiToken) {
   await cfExec(reqDeleteApp(accountId, id), apiToken);
 }
+async function listReusablePolicies(accountId, apiToken) {
+  return (await cfExec(reqListReusablePolicies(accountId), apiToken)) || [];
+}
+async function deleteReusablePolicy(accountId, id, apiToken) {
+  await cfExec(reqDeleteReusablePolicy(accountId, id), apiToken);
+}
 
 module.exports = {
   CF_API,
@@ -152,4 +166,6 @@ module.exports = {
   cfExec, createServiceToken, findServiceTokenByName, deleteServiceToken, rotateServiceToken,
   findAppByHostname, upsertServiceAuthPolicy,
   findTunnelByName, deleteTunnel, findZoneIdByName, findDnsRecordByHostname, deleteDnsRecord, deleteApp,
+  listReusablePolicies,
+  deleteReusablePolicy,
 };
