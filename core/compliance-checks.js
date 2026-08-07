@@ -96,7 +96,27 @@ function vuln() {
   die(high + critical === 0, ['VULN: npm audit (prod) -- high: ' + high + ', critical: ' + critical + (high + critical ? ' (remediation needed)' : ' -- clean')]);
 }
 
+function secrets() {
+  // Scan the DATA surfaces (where operator data lives), matching the weekly-scan
+  // scoping -- code, tests, and demo fixtures carry deliberate canaries and are
+  // the repo-wide /run-scan-tree operator tool's job, not compliance evidence.
+  const dirs = ['state', 'knowledge', 'exports', 'inbox'].filter(d => fs.existsSync(path.join(ROOT, d)));
+  if (!dirs.length) die(false, ['SECRETS: no data directories present to scan']);
+  const lines = []; let clean = true;
+  for (const d of dirs) {
+    try {
+      execFileSync('node', [path.join('scripts', 'scan-tree.js'), d], { cwd: ROOT, encoding: 'utf8', timeout: 45000 });
+      lines.push('SECRETS: ' + d + '/ clean');
+    } catch (e) {
+      clean = false;
+      lines.push('SECRETS: ' + d + '/ FINDINGS -- ' + ((e.stdout || '') + (e.stderr || '')).trim().split('\n')[0]);
+    }
+  }
+  lines.push(clean ? 'SECRETS: OK -- no secret/PII patterns in operator data surfaces' : 'SECRETS: remediate the flagged data files');
+  die(clean, lines);
+}
+
 const cmd = process.argv[2];
-const table = { 'net-ingress': netIngress, 'edge-auth': edgeAuth, pii, backup, 'fleet-pause': fleetPause, vuln };
+const table = { 'net-ingress': netIngress, 'edge-auth': edgeAuth, pii, backup, 'fleet-pause': fleetPause, vuln, secrets };
 if (!table[cmd]) { console.log('usage: compliance-checks.js <' + Object.keys(table).join('|') + '>'); process.exit(2); }
 table[cmd]();

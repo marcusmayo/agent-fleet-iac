@@ -25,7 +25,12 @@ function walk(dir, out) {
   let entries;
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
   for (const e of entries) {
-    if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name)) walk(path.join(dir, e.name), out); continue; }
+    if (e.isDirectory()) {
+      // state/compliance holds derived evidence records that quote finding samples
+      // verbatim -- scanning them re-flags the scanner's own output. Never inputs.
+      if (e.name === 'compliance' && path.basename(dir) === 'state') continue;
+      if (!SKIP_DIRS.has(e.name)) walk(path.join(dir, e.name), out); continue;
+    }
     if (SKIP_FILE.has(e.name)) continue;
     if (SKIP_EXT.has(path.extname(e.name).toLowerCase())) continue;
     out.push(path.join(dir, e.name));
