@@ -44,7 +44,11 @@ function scan(root) {
       for (const [label, re] of PATTERNS) {
         re.lastIndex = 0;
         const m = re.exec(lines[i]);
-        if (m) findings.push({ file: f, line: i + 1, label, sample: m[0].slice(0, 12) + '…' });
+        if (m) {
+          // RFC 2606 reserved documentation domains are placeholders, not data.
+          if (label === 'EMAIL' && /@(example\.(com|org|net)|[^\s@]+\.(invalid|test))$/i.test(m[0])) continue;
+          findings.push({ file: f, line: i + 1, label, sample: m[0].slice(0, 12) + '…' });
+        }
       }
     }
   }
