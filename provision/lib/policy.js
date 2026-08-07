@@ -178,9 +178,18 @@ function setPolicy({ key, value, attest, explicit }) {
   let syncOutcome;
   if (spec.file === 'maxMonthlyBudgetUsd') {
     const { spawnSync } = require('node:child_process');
-    const azBin = process.platform === 'win32' ? 'az.cmd' : 'az';
-    const r2 = spawnSync(azBin, ['consumption', 'budget', 'update', '--budget-name', pol.budgetName, '--amount', String(next), '--query', 'amount', '-o', 'tsv'],
-                         { encoding: 'utf8', timeout: 45000 });
+    // Node >=20.12 (CVE-2024-27980) forbids spawning .cmd without a shell (EINVAL),
+    // and args-array+shell triggers DEP0190 -- so on Windows we build ONE command
+    // string (every value charset-gated above/below) and run it with shell:true.
+    const azArgs = ['consumption', 'budget', 'update', '--budget-name', pol.budgetName, '--amount', String(next), '--query', 'amount', '-o', 'tsv'];
+    let r2;
+    if (!/^[A-Za-z0-9_-]{1,63}$/.test(pol.budgetName)) {
+      r2 = { status: 1, stdout: '', stderr: 'budgetName in policy file fails safe charset [A-Za-z0-9_-]' };
+    } else if (process.platform === 'win32') {
+      r2 = spawnSync('az ' + azArgs.join(' '), { shell: true, encoding: 'utf8', timeout: 45000 });
+    } else {
+      r2 = spawnSync('az', azArgs, { encoding: 'utf8', timeout: 45000 });
+    }
     const out = (r2.stdout || '').trim();
     // az prefixes preview/deprecation WARNINGs on stderr -- surface the first REAL line.
     const errLines = ((r2.stderr || '') + (r2.error ? String(r2.error) : '')).split('\n').map(s => s.trim()).filter(Boolean);
