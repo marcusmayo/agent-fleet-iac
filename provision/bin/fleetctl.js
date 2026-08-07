@@ -18,7 +18,7 @@ Usage:
   fleetctl register <contract.agent.jsonc> [--aegis-config <path>]
   fleetctl deregister <name | contract.agent.jsonc> [--aegis-config <path>]
   fleetctl decommission <contract.agent.jsonc> [--go] [--aegis-config <path>]
-  fleetctl policy   [show] | set <maxFleet|budget> <n> --attest "<phrase>"
+  fleetctl policy   [show] | set <key> <value> --attest "I approve setting <key> to <value>"
   fleetctl set-secrets <agent>
   fleetctl --help
 
@@ -57,7 +57,9 @@ Commands:
             show prints current caps + the last attested actions. set mutates ONE
             value in place (comments preserved), verifies the re-read, and appends
             the attempt -- approved or refused -- to provision/policy-audit.jsonl.
-            The attestation must read exactly: I approve setting <key> to <n>
+            Keys: maxFleet maxBatch budget allowedRegions defaultRegion budgetName.
+            Cross-checks fail closed (batch<=fleet; defaultRegion must stay inside
+            allowedRegions). Attestation must read exactly: I approve setting <key> to <value>
 
   set-secrets  Seed an agent's Key Vault with the three bootstrap secrets so it can
             self-configure at first boot. TOTP is generated here (enroll the printed QR /
@@ -144,7 +146,7 @@ async function main(argv) {
         return 0;
       } catch (e) { console.error(c.red(String(e.message || e))); return 2; }
     }
-    console.error(c.red(`policy: unknown subcommand "${sub}" — use: policy show | policy set <maxFleet|budget> <n> --attest "<phrase>"`));
+    console.error(c.red(`policy: unknown subcommand "${sub}" — use: policy show | policy set <key> <value> --attest "..." (keys: maxFleet maxBatch budget allowedRegions defaultRegion budgetName)`));
     return 2;
   }
 

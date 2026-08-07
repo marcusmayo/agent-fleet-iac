@@ -66,7 +66,49 @@ function checkProvision(policy, { currentFleet = [], names = [], region } = {}) 
 // else refuses, mutates nothing, and the refusal is still LEDGERED. Every
 // attempt appends {ts, actor, deployerObjectId, action, key, from, to, phrase,
 // outcome} to provision/policy-audit.jsonl — append-only attestation evidence.
-const SETTABLE = { maxFleet: 'maxFleet', budget: 'maxMonthlyBudgetUsd' };
+const SETTABLE = {
+  maxFleet:       { file: 'maxFleet',            kind: 'int' },
+  maxBatch:       { file: 'maxBatch',            kind: 'int' },
+  budget:         { file: 'maxMonthlyBudgetUsd', kind: 'int' },
+  allowedRegions: { file: 'allowedRegions',      kind: 'list' },   // comma-separated full replacement
+  defaultRegion:  { file: 'defaultRegion',       kind: 'str', re: /^[a-z0-9]{3,30}$/ },
+  budgetName:     { file: 'budgetName',          kind: 'str', re: /^[A-Za-z0-9_-]{1,63}$/ },
+};
+
+// Parse + shape-validate; throws with the ledgerable reason on bad input.
+function coerce(key, spec, value) {
+  if (spec.kind === 'int') {
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < 1) throw new Error(`${key} must be a positive integer (got "${value}")`);
+    return n;
+  }
+  if (spec.kind === 'str') {
+    const s = String(value || '').trim();
+    if (!spec.re.test(s)) throw new Error(`${key} "${s}" fails ${spec.re}`);
+    return s;
+  }
+  const list = [...new Set(String(value || '').split(',').map((s) => s.trim()).filter(Boolean))];
+  if (!list.length || list.some((s) => !/^[a-z0-9]{3,30}$/.test(s))) {
+    throw new Error(`${key} must be a comma-separated list of azure region names (got "${value}")`);
+  }
+  return list;
+}
+
+// Coherence gates across keys -- fail closed with the exact fix named.
+function crossCheck(fileKey, next, pol) {
+  if (fileKey === 'maxBatch' && next > pol.maxFleet) {
+    throw new Error(`maxBatch ${next} would exceed maxFleet ${pol.maxFleet} -- raise maxFleet first`);
+  }
+  if (fileKey === 'maxFleet' && pol.maxBatch > next) {
+    throw new Error(`maxFleet ${next} would drop below maxBatch ${pol.maxBatch} -- lower maxBatch first`);
+  }
+  if (fileKey === 'allowedRegions' && !next.includes(pol.defaultRegion)) {
+    throw new Error(`allowedRegions [${next.join(', ')}] would exclude defaultRegion "${pol.defaultRegion}" -- change defaultRegion first or include it`);
+  }
+  if (fileKey === 'defaultRegion' && !pol.allowedRegions.includes(next)) {
+    throw new Error(`defaultRegion "${next}" is not in allowedRegions [${pol.allowedRegions.join(', ')}] -- add it to allowedRegions first`);
+  }
+}
 
 function attestPhrase(key, value) {
   return `I approve setting ${key} to ${value}`;
@@ -101,27 +143,37 @@ function showPolicy(explicit) {
 }
 
 function setPolicy({ key, value, attest, explicit }) {
-  const fileKey = SETTABLE[key];
-  if (!fileKey) throw new Error(`policy set: unknown key "${key}" — settable: ${Object.keys(SETTABLE).join(', ')}`);
-  const n = Number(value);
-  if (!Number.isInteger(n) || n < 1) throw new Error(`policy set: ${key} must be a positive integer (got "${value}")`);
+  const spec = SETTABLE[key];
+  if (!spec) throw new Error(`policy set: unknown key "${key}" -- settable: ${Object.keys(SETTABLE).join(', ')}`);
   const p = resolvePolicyPath(explicit);
-  if (!p) throw new Error('policy set: no aegis.policy.jsonc found — the gate file must exist to be edited');
-  const before = loadPolicy(p)[fileKey];
-  const required = attestPhrase(key, n);
-  if ((attest || '').trim() !== required) {
-    ledger(p, { action: 'policy.set', key: fileKey, from: before, to: n, phrase: attest || '', outcome: 'refused: attestation mismatch' });
-    throw new Error(`policy set REFUSED — attestation must read exactly:\n  --attest "${required}"`);
+  if (!p) throw new Error('policy set: no aegis.policy.jsonc found -- the gate file must exist to be edited');
+  const pol = loadPolicy(p);
+  const before = pol[spec.file];
+  let next;
+  try { next = coerce(key, spec, value); }
+  catch (e) {
+    ledger(p, { action: 'policy.set', key: spec.file, from: before, to: String(value), phrase: attest || '', outcome: 'refused: ' + e.message });
+    throw new Error('policy set REFUSED -- ' + e.message);
   }
-  const src = fs.readFileSync(p, 'utf8');
-  const token = `"${fileKey}": ${before},`;
-  const hits = src.split(token).length - 1;
-  if (hits !== 1) throw new Error(`policy set aborted: expected exactly one \`${token}\` in ${p}, found ${hits} — edit by hand`);
-  fs.writeFileSync(p, src.replace(token, `"${fileKey}": ${n},`));
-  const after = loadPolicy(p)[fileKey];
-  if (after !== n) throw new Error(`policy set verification failed: re-read ${fileKey}=${after}, expected ${n}`);
-  const rec = ledger(p, { action: 'policy.set', key: fileKey, from: before, to: n, phrase: attest, outcome: 'ok' });
-  return { path: p, key: fileKey, from: before, to: n, ledgered: rec.ts };
+  const required = attestPhrase(key, String(value).trim());
+  if ((attest || '').trim() !== required) {
+    ledger(p, { action: 'policy.set', key: spec.file, from: before, to: next, phrase: attest || '', outcome: 'refused: attestation mismatch' });
+    throw new Error(`policy set REFUSED -- attestation must read exactly:\n  --attest "${required}"`);
+  }
+  try { crossCheck(spec.file, next, pol); }
+  catch (e) {
+    ledger(p, { action: 'policy.set', key: spec.file, from: before, to: next, phrase: attest, outcome: 'refused: ' + e.message });
+    throw new Error('policy set REFUSED -- ' + e.message);
+  }
+  const src2 = fs.readFileSync(p, 'utf8');
+  const token = `"${spec.file}": ${JSON.stringify(before)}`;
+  const hits = src2.split(token).length - 1;
+  if (hits !== 1) throw new Error(`policy set aborted: expected exactly one \`${token}\` in ${p}, found ${hits} -- edit by hand`);
+  fs.writeFileSync(p, src2.replace(token, `"${spec.file}": ${JSON.stringify(next)}`));
+  const after = loadPolicy(p)[spec.file];
+  if (JSON.stringify(after) !== JSON.stringify(next)) throw new Error(`policy set verification failed: re-read ${spec.file}=${JSON.stringify(after)}`);
+  const rec = ledger(p, { action: 'policy.set', key: spec.file, from: before, to: next, phrase: attest, outcome: 'ok' });
+  return { path: p, key: spec.file, from: before, to: next, ledgered: rec.ts };
 }
 
 module.exports = { DEFAULTS, resolvePolicyPath, loadPolicy, checkProvision, showPolicy, setPolicy, attestPhrase };
