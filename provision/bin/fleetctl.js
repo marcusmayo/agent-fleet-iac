@@ -18,6 +18,7 @@ Usage:
   fleetctl register <contract.agent.jsonc> [--aegis-config <path>]
   fleetctl deregister <name | contract.agent.jsonc> [--aegis-config <path>]
   fleetctl decommission <contract.agent.jsonc> [--go] [--aegis-config <path>]
+  fleetctl policy   [show] | set <maxFleet|budget> <n> --attest "<phrase>"
   fleetctl set-secrets <agent>
   fleetctl --help
 
@@ -51,6 +52,12 @@ Commands:
 
   deregister  Remove an agent's entry from aegis.config.json (by name or contract) so
             Aegis self-updates on decommission. Idempotent; never touches other agents.
+
+  policy    Show or change the fleet governance gate (provision/aegis.policy.jsonc).
+            show prints current caps + the last attested actions. set mutates ONE
+            value in place (comments preserved), verifies the re-read, and appends
+            the attempt -- approved or refused -- to provision/policy-audit.jsonl.
+            The attestation must read exactly: I approve setting <key> to <n>
 
   set-secrets  Seed an agent's Key Vault with the three bootstrap secrets so it can
             self-configure at first boot. TOTP is generated here (enroll the printed QR /
@@ -120,6 +127,25 @@ async function main(argv) {
   if (cmd === 'decommission') {
     if (!file) { console.error(c.red('decommission: missing <contract.agent.jsonc>')); return 2; }
     return runDecommission(file, { go: flags.has('--go'), aegisConfig });
+  }
+
+  if (cmd === 'policy') {
+    const { showPolicy, setPolicy } = require('../lib/policy');
+    const rest = args.slice(1);
+    const sub = rest[0];
+    if (!sub || sub === 'show') { console.log(showPolicy()); return 0; }
+    if (sub === 'set') {
+      const ai = rest.indexOf('--attest');
+      const attest = ai >= 0 ? (rest[ai + 1] || '') : '';
+      const pos = rest.slice(1).filter((a, i, arr) => a !== '--attest' && arr[i - 1] !== '--attest');
+      try {
+        const r = setPolicy({ key: pos[0], value: pos[1], attest });
+        console.log(c.green(`policy: ${r.key} ${r.from} -> ${r.to}`) + c.dim(`  (${r.path}; ledgered ${r.ledgered})`));
+        return 0;
+      } catch (e) { console.error(c.red(String(e.message || e))); return 2; }
+    }
+    console.error(c.red(`policy: unknown subcommand "${sub}" — use: policy show | policy set <maxFleet|budget> <n> --attest "<phrase>"`));
+    return 2;
   }
 
   console.error(c.red(`unknown command "${cmd}"`) + '\n');

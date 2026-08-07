@@ -58,4 +58,70 @@ function checkProvision(policy, { currentFleet = [], names = [], region } = {}) 
   return { ok: errors.length === 0, errors };
 }
 
-module.exports = { DEFAULTS, resolvePolicyPath, loadPolicy, checkProvision };
+// ---------------------------------------------------------------------------
+// Attested policy mutation. The policy file is the reviewable governance
+// artifact, so `set` performs a GUARDED value swap that preserves every comment
+// (never a JSON round-trip): the exact `"<key>": <old>` token must match once.
+// The attestation phrase must equal the canonical sentence verbatim; anything
+// else refuses, mutates nothing, and the refusal is still LEDGERED. Every
+// attempt appends {ts, actor, deployerObjectId, action, key, from, to, phrase,
+// outcome} to provision/policy-audit.jsonl — append-only attestation evidence.
+const SETTABLE = { maxFleet: 'maxFleet', budget: 'maxMonthlyBudgetUsd' };
+
+function attestPhrase(key, value) {
+  return `I approve setting ${key} to ${value}`;
+}
+
+function auditPath(policyPath) {
+  return path.join(path.dirname(policyPath), 'policy-audit.jsonl');
+}
+
+function ledger(policyPath, entry) {
+  const rec = {
+    ts: new Date().toISOString(),
+    actor: (require('node:os').userInfo().username || 'unknown'),
+    deployerObjectId: (process.env.DEPLOYER_OBJECT_ID || '').trim() || null,
+    ...entry,
+  };
+  fs.appendFileSync(auditPath(policyPath), JSON.stringify(rec) + '\n');
+  return rec;
+}
+
+function showPolicy(explicit) {
+  const pol = loadPolicy(explicit);
+  const lines = [`policy source: ${pol.source}`];
+  for (const k of Object.keys(DEFAULTS)) lines.push(`  ${k}: ${JSON.stringify(pol[k])}`);
+  const ap = pol.source.endsWith('.jsonc') ? auditPath(pol.source) : null;
+  if (ap && fs.existsSync(ap)) {
+    const tail = fs.readFileSync(ap, 'utf8').trim().split('\n').slice(-3);
+    lines.push(`  recent attested actions (${path.basename(ap)}):`);
+    for (const t of tail) lines.push(`    ${t}`);
+  }
+  return lines.join('\n');
+}
+
+function setPolicy({ key, value, attest, explicit }) {
+  const fileKey = SETTABLE[key];
+  if (!fileKey) throw new Error(`policy set: unknown key "${key}" — settable: ${Object.keys(SETTABLE).join(', ')}`);
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1) throw new Error(`policy set: ${key} must be a positive integer (got "${value}")`);
+  const p = resolvePolicyPath(explicit);
+  if (!p) throw new Error('policy set: no aegis.policy.jsonc found — the gate file must exist to be edited');
+  const before = loadPolicy(p)[fileKey];
+  const required = attestPhrase(key, n);
+  if ((attest || '').trim() !== required) {
+    ledger(p, { action: 'policy.set', key: fileKey, from: before, to: n, phrase: attest || '', outcome: 'refused: attestation mismatch' });
+    throw new Error(`policy set REFUSED — attestation must read exactly:\n  --attest "${required}"`);
+  }
+  const src = fs.readFileSync(p, 'utf8');
+  const token = `"${fileKey}": ${before},`;
+  const hits = src.split(token).length - 1;
+  if (hits !== 1) throw new Error(`policy set aborted: expected exactly one \`${token}\` in ${p}, found ${hits} — edit by hand`);
+  fs.writeFileSync(p, src.replace(token, `"${fileKey}": ${n},`));
+  const after = loadPolicy(p)[fileKey];
+  if (after !== n) throw new Error(`policy set verification failed: re-read ${fileKey}=${after}, expected ${n}`);
+  const rec = ledger(p, { action: 'policy.set', key: fileKey, from: before, to: n, phrase: attest, outcome: 'ok' });
+  return { path: p, key: fileKey, from: before, to: n, ledgered: rec.ts };
+}
+
+module.exports = { DEFAULTS, resolvePolicyPath, loadPolicy, checkProvision, showPolicy, setPolicy, attestPhrase };

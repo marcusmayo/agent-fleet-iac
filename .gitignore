@@ -11,3 +11,4 @@ agentfleet*
 agents/*.local.jsonc
 
 bicep/main.json
+provision/policy-audit.jsonl
