@@ -183,7 +183,7 @@ function setPolicy({ key, value, attest, explicit }) {
     // string (every value charset-gated above/below) and run it with shell:true.
     const runAz = (azArgs) => {
       const r2 = process.platform === 'win32'
-        ? spawnSync('az ' + azArgs.join(' '), { shell: true, encoding: 'utf8', timeout: 45000 })
+        ? spawnSync('az ' + azArgs.map((a) => '"' + a + '"').join(' '), { shell: true, encoding: 'utf8', timeout: 45000 })
         : spawnSync('az', azArgs, { encoding: 'utf8', timeout: 45000 });
       const out = (r2.stdout || '').trim();
       // az prefixes preview/deprecation WARNINGs on stderr -- surface the first REAL line.
@@ -194,25 +194,27 @@ function setPolicy({ key, value, attest, explicit }) {
     if (!/^[A-Za-z0-9_-]{1,63}$/.test(pol.budgetName)) {
       syncOutcome = 'failed: budgetName in policy file fails safe charset [A-Za-z0-9_-]';
     } else {
-      const u = runAz(['consumption', 'budget', 'update', '--budget-name', pol.budgetName, '--amount', String(next), '--query', 'amount', '-o', 'tsv']);
-      if (u.status === 0 && u.out) {
-        syncOutcome = `ok: ${pol.budgetName} amount=${u.out}`;
-      } else if (/\(404\)|No budget found/i.test(u.err)) {
-        // SELF-HEAL: the Cost Management budget object was never created -- create it
-        // now (Cost category, Monthly grain, current-month start) so the attested gate
-        // value and the Azure alerting object stay one and the same from here on.
-        const now = new Date();
-        const startD = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`;
-        const endD = `${now.getUTCFullYear() + 5}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`;
-        const c = runAz(['consumption', 'budget', 'create', '--budget-name', pol.budgetName, '--amount', String(next),
-                         '--category', 'cost', '--time-grain', 'monthly', '--start-date', startD, '--end-date', endD,
-                         '--query', 'amount', '-o', 'tsv']);
-        syncOutcome = (c.status === 0 && c.out)
-          ? `ok: created ${pol.budgetName} amount=${c.out} (monthly, from ${startD})`
-          : `failed: create after 404: ${c.err}`;
-      } else {
-        syncOutcome = `failed: ${u.err}`;
-      }
+      // ONE idempotent ARM PUT (create-or-update) on the budgets resource -- the
+      // legacy `az consumption budget` group speaks a retired filter schema (400s
+      // at subscription scope). az rest substitutes {subscriptionId} itself; the
+      // JSON body rides a temp file so no shell quoting is involved on Windows.
+      const now = new Date();
+      const startD = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01T00:00:00Z`;
+      const endD = `${now.getUTCFullYear() + 5}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01T00:00:00Z`;
+      const body = { properties: { category: 'Cost', amount: next, timeGrain: 'Monthly', timePeriod: { startDate: startD, endDate: endD } } };
+      const os2 = require('node:os');
+      const tmp = path.join(os2.tmpdir(), 'aegis-budget-' + process.pid + '.json');
+      let put;
+      try {
+        fs.writeFileSync(tmp, JSON.stringify(body));
+        put = runAz(['rest', '--method', 'put',
+          '--url', 'https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.Consumption/budgets/' + pol.budgetName + '?api-version=2021-10-01',
+          '--headers', 'Content-Type=application/json', '--body', '@' + tmp,
+          '--query', 'properties.amount', '-o', 'tsv']);
+      } finally { try { fs.unlinkSync(tmp); } catch { /* gone */ } }
+      syncOutcome = (put.status === 0 && put.out)
+        ? `ok: ${pol.budgetName} amount=${put.out} (ARM put, monthly from ${startD.slice(0, 10)})`
+        : `failed: ${put.err}`;
     }
   }
   const rec = ledger(p, { action: 'policy.set', key: spec.file, from: before, to: next, phrase: attest, outcome: 'ok', ...(syncOutcome ? { syncOutcome } : {}) });
