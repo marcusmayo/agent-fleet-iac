@@ -178,11 +178,14 @@ function setPolicy({ key, value, attest, explicit }) {
   let syncOutcome;
   if (spec.file === 'maxMonthlyBudgetUsd') {
     const { spawnSync } = require('node:child_process');
-    const r2 = spawnSync('az', ['consumption', 'budget', 'update', '--budget-name', pol.budgetName, '--amount', String(next), '--query', 'amount', '-o', 'tsv'],
-                         { encoding: 'utf8', timeout: 45000, shell: process.platform === 'win32' });
+    const azBin = process.platform === 'win32' ? 'az.cmd' : 'az';
+    const r2 = spawnSync(azBin, ['consumption', 'budget', 'update', '--budget-name', pol.budgetName, '--amount', String(next), '--query', 'amount', '-o', 'tsv'],
+                         { encoding: 'utf8', timeout: 45000 });
     const out = (r2.stdout || '').trim();
-    const err = ((r2.stderr || '').trim().split('\n')[0]) || String(r2.error || '').split('\n')[0];
-    syncOutcome = (r2.status === 0 && out) ? `ok: ${pol.budgetName} amount=${out}` : `failed: ${err || 'no output'}`;
+    // az prefixes preview/deprecation WARNINGs on stderr -- surface the first REAL line.
+    const errLines = ((r2.stderr || '') + (r2.error ? String(r2.error) : '')).split('\n').map(s => s.trim()).filter(Boolean);
+    const err = (errLines.find(l => !l.startsWith('WARNING')) || errLines[0] || 'no output').slice(0, 180);
+    syncOutcome = (r2.status === 0 && out) ? `ok: ${pol.budgetName} amount=${out}` : `failed: ${err}`;
   }
   const rec = ledger(p, { action: 'policy.set', key: spec.file, from: before, to: next, phrase: attest, outcome: 'ok', ...(syncOutcome ? { syncOutcome } : {}) });
   return { path: p, key: spec.file, from: before, to: next, ledgered: rec.ts, syncOutcome };
