@@ -181,20 +181,39 @@ function setPolicy({ key, value, attest, explicit }) {
     // Node >=20.12 (CVE-2024-27980) forbids spawning .cmd without a shell (EINVAL),
     // and args-array+shell triggers DEP0190 -- so on Windows we build ONE command
     // string (every value charset-gated above/below) and run it with shell:true.
-    const azArgs = ['consumption', 'budget', 'update', '--budget-name', pol.budgetName, '--amount', String(next), '--query', 'amount', '-o', 'tsv'];
-    let r2;
+    const runAz = (azArgs) => {
+      const r2 = process.platform === 'win32'
+        ? spawnSync('az ' + azArgs.join(' '), { shell: true, encoding: 'utf8', timeout: 45000 })
+        : spawnSync('az', azArgs, { encoding: 'utf8', timeout: 45000 });
+      const out = (r2.stdout || '').trim();
+      // az prefixes preview/deprecation WARNINGs on stderr -- surface the first REAL line.
+      const errLines = ((r2.stderr || '') + (r2.error ? String(r2.error) : '')).split('\n').map(s => s.trim()).filter(Boolean);
+      const err = (errLines.find(l => !l.startsWith('WARNING')) || errLines[0] || 'no output').slice(0, 200);
+      return { status: r2.status, out, err };
+    };
     if (!/^[A-Za-z0-9_-]{1,63}$/.test(pol.budgetName)) {
-      r2 = { status: 1, stdout: '', stderr: 'budgetName in policy file fails safe charset [A-Za-z0-9_-]' };
-    } else if (process.platform === 'win32') {
-      r2 = spawnSync('az ' + azArgs.join(' '), { shell: true, encoding: 'utf8', timeout: 45000 });
+      syncOutcome = 'failed: budgetName in policy file fails safe charset [A-Za-z0-9_-]';
     } else {
-      r2 = spawnSync('az', azArgs, { encoding: 'utf8', timeout: 45000 });
+      const u = runAz(['consumption', 'budget', 'update', '--budget-name', pol.budgetName, '--amount', String(next), '--query', 'amount', '-o', 'tsv']);
+      if (u.status === 0 && u.out) {
+        syncOutcome = `ok: ${pol.budgetName} amount=${u.out}`;
+      } else if (/\(404\)|No budget found/i.test(u.err)) {
+        // SELF-HEAL: the Cost Management budget object was never created -- create it
+        // now (Cost category, Monthly grain, current-month start) so the attested gate
+        // value and the Azure alerting object stay one and the same from here on.
+        const now = new Date();
+        const startD = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`;
+        const endD = `${now.getUTCFullYear() + 5}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`;
+        const c = runAz(['consumption', 'budget', 'create', '--budget-name', pol.budgetName, '--amount', String(next),
+                         '--category', 'cost', '--time-grain', 'monthly', '--start-date', startD, '--end-date', endD,
+                         '--query', 'amount', '-o', 'tsv']);
+        syncOutcome = (c.status === 0 && c.out)
+          ? `ok: created ${pol.budgetName} amount=${c.out} (monthly, from ${startD})`
+          : `failed: create after 404: ${c.err}`;
+      } else {
+        syncOutcome = `failed: ${u.err}`;
+      }
     }
-    const out = (r2.stdout || '').trim();
-    // az prefixes preview/deprecation WARNINGs on stderr -- surface the first REAL line.
-    const errLines = ((r2.stderr || '') + (r2.error ? String(r2.error) : '')).split('\n').map(s => s.trim()).filter(Boolean);
-    const err = (errLines.find(l => !l.startsWith('WARNING')) || errLines[0] || 'no output').slice(0, 180);
-    syncOutcome = (r2.status === 0 && out) ? `ok: ${pol.budgetName} amount=${out}` : `failed: ${err}`;
   }
   const rec = ledger(p, { action: 'policy.set', key: spec.file, from: before, to: next, phrase: attest, outcome: 'ok', ...(syncOutcome ? { syncOutcome } : {}) });
   return { path: p, key: spec.file, from: before, to: next, ledgered: rec.ts, syncOutcome };
