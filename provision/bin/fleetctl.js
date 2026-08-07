@@ -142,7 +142,7 @@ async function main(argv) {
       const pos = rest.slice(1).filter((a, i, arr) => a !== '--attest' && arr[i - 1] !== '--attest');
       try {
         const r = setPolicy({ key: pos[0], value: pos[1], attest });
-        console.log(c.green(`policy: ${r.key} ${r.from} -> ${r.to}`) + c.dim(`  (${r.path}; ledgered ${r.ledgered})`));
+        console.log(c.green(`policy: ${r.key} ${JSON.stringify(r.from)} -> ${JSON.stringify(r.to)}`) + c.dim(`  (${r.path}; ledgered ${r.ledgered})`) + (r.syncOutcome ? '\n' + (r.syncOutcome.startsWith('ok') ? c.green('azure budget sync ' + r.syncOutcome) : c.red('azure budget sync ' + r.syncOutcome)) : ''));
         return 0;
       } catch (e) { console.error(c.red(String(e.message || e))); return 2; }
     }

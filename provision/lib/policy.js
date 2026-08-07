@@ -172,8 +172,20 @@ function setPolicy({ key, value, attest, explicit }) {
   fs.writeFileSync(p, src2.replace(token, `"${spec.file}": ${JSON.stringify(next)}`));
   const after = loadPolicy(p)[spec.file];
   if (JSON.stringify(after) !== JSON.stringify(next)) throw new Error(`policy set verification failed: re-read ${spec.file}=${JSON.stringify(after)}`);
-  const rec = ledger(p, { action: 'policy.set', key: spec.file, from: before, to: next, phrase: attest, outcome: 'ok' });
-  return { path: p, key: spec.file, from: before, to: next, ledgered: rec.ts };
+  // Azure budget-object sync (2nd step of the budget control): the GATE mutation
+  // above is the enforcement and always lands; syncing the Cost Management budget
+  // object is best-effort, FAIL-LOUD-NON-BLOCKING -- its outcome rides the ledger.
+  let syncOutcome;
+  if (spec.file === 'maxMonthlyBudgetUsd') {
+    const { spawnSync } = require('node:child_process');
+    const r2 = spawnSync('az', ['consumption', 'budget', 'update', '--budget-name', pol.budgetName, '--amount', String(next), '--query', 'amount', '-o', 'tsv'],
+                         { encoding: 'utf8', timeout: 45000, shell: process.platform === 'win32' });
+    const out = (r2.stdout || '').trim();
+    const err = ((r2.stderr || '').trim().split('\n')[0]) || String(r2.error || '').split('\n')[0];
+    syncOutcome = (r2.status === 0 && out) ? `ok: ${pol.budgetName} amount=${out}` : `failed: ${err || 'no output'}`;
+  }
+  const rec = ledger(p, { action: 'policy.set', key: spec.file, from: before, to: next, phrase: attest, outcome: 'ok', ...(syncOutcome ? { syncOutcome } : {}) });
+  return { path: p, key: spec.file, from: before, to: next, ledgered: rec.ts, syncOutcome };
 }
 
 module.exports = { DEFAULTS, resolvePolicyPath, loadPolicy, checkProvision, showPolicy, setPolicy, attestPhrase };
