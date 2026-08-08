@@ -2,8 +2,9 @@
 # Converged agent base (Castor/Keel) with Cloudflare Tunnel transport.
 # Placeholders (double-underscore tokens) are injected by vm.bicep at deploy
 # time. The tunnel token is the ONLY secret in customData and is scrubbed from
-# cloud logs after cloudflared installs. Runtime secrets (TOTP, model API key)
-# are injected later via bootstrap over SSH — never in this file.
+# cloud logs after cloudflared installs. Runtime secrets (model/vision API keys)
+# are fetched at first boot from the agent's Key Vault via managed identity
+# (seeded by `fleetctl set-secrets`) — never in this file, never over SSH.
 package_update: true
 packages: [docker.io, docker-compose-v2, git, python3-qrcode, curl]
 runcmd:
@@ -24,7 +25,7 @@ runcmd:
   # Agent root: keel-style repos put infra/ at the clone root; Castor keeps it under
   # scaffold/. Detect and use the right dir (safe no-op for keel — no scaffold/).
   - 'if [ -d "/home/__ADMIN_USER__/agent/scaffold" ]; then AGENT_DIR="/home/__ADMIN_USER__/agent/scaffold"; else AGENT_DIR="/home/__ADMIN_USER__/agent"; fi; echo "agent dir: $AGENT_DIR"'
-  - printf 'AGENT_PROFILE=%s\nKEY_VAULT_NAME=%s\nMSI_CLIENT_ID=%s\n' '__AGENT_PROFILE__' '__KEY_VAULT_NAME__' '__MSI_CLIENT_ID__' > "$AGENT_DIR/.provision-flags"
+  - printf 'AGENT_PROFILE=%s\nKEY_VAULT_NAME=%s\nMSI_CLIENT_ID=%s\nAGENT_NAME=%s\nBACKUP_ACCOUNT=%s\n' '__AGENT_PROFILE__' '__KEY_VAULT_NAME__' '__MSI_CLIENT_ID__' '__AGENT_NAME__' '__BACKUP_ACCOUNT__' > "$AGENT_DIR/.provision-flags"
   # Brand this agent with its deploy-time name. The shared webchat reads agent_name
   # from system/agent.yaml; overwrite the repo default with __AGENT_NAME__, then
   # verify loudly (fail the build rather than ship a mis-branded agent).
@@ -51,5 +52,10 @@ runcmd:
   # what makes provisioning fire-and-forget: up --go + set-secrets and the agent comes
   # up on its own. If it aborts (never seeded), SSH in and run bootstrap.sh by hand.
   - sudo -u __ADMIN_USER__ bash "$AGENT_DIR/infra/scripts/bootstrap.sh" > /var/log/agent-bootstrap.log 2>&1 || echo "bootstrap did not complete unattended -- SSH in and run infra/scripts/bootstrap.sh (see /var/log/agent-bootstrap.log)" | tee -a /var/log/agent-bootstrap.log
+  # --- Fleet backup: wrapper + daily timer (script no-ops when BACKUP_ACCOUNT is empty) ---
+  - 'printf "#!/bin/bash\nexec bash %s/scripts/core/backup-push.sh \"$@\"\n" "$AGENT_DIR" > /usr/local/bin/agent-backup && chmod 0755 /usr/local/bin/agent-backup'
+  - 'printf "[Unit]\nDescription=Fleet agent backup push\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/agent-backup push\n" > /etc/systemd/system/agent-backup.service'
+  - 'printf "[Unit]\nDescription=Daily fleet agent backup\n\n[Timer]\nOnCalendar=daily\nRandomizedDelaySec=1800\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n" > /etc/systemd/system/agent-backup.timer'
+  - 'systemctl daemon-reload && systemctl enable --now agent-backup.timer || echo "backup timer enable failed (non-fatal)"'
   - "{ dpkg-query -W docker.io docker-compose-v2 git cloudflared; } > /var/log/agent-provision-versions.log 2>&1"
 final_message: "agent (__AGENT_PROFILE__) cloud-init complete after $UPTIME s -- it self-bootstraps from its Key Vault; seed with 'fleetctl set-secrets <agent>' if you haven't. Logs: /var/log/agent-bootstrap.log"

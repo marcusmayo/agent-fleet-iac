@@ -17,13 +17,15 @@ GATE_SUB="${3:-}"
 HERE="$(cd "$(dirname "$0")" && pwd)"        # the core/ dir
 [ -d "$HERE" ] || { echo "FATAL: core dir not found: $HERE"; exit 1; }
 CORE_REF="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+# Stamp honesty: a sync from a dirty tree is not that commit -- mark it.
+git -C "$HERE" diff --quiet 2>/dev/null || CORE_REF="${CORE_REF}+dirty"
 
 vendor() {
   SRCDIR="$1"; DEST="$2"; MANIFEST="$3"
   [ -d "$DEST" ] || { echo "FATAL: dest not found: $DEST"; exit 1; }
   [ -f "$MANIFEST" ] || { echo "FATAL: no manifest: $MANIFEST"; exit 1; }
   echo "Syncing fleet-core ($CORE_REF) -> $DEST"
-  for f in "$SRCDIR"/*.js "$SRCDIR"/*.yaml "$SRCDIR"/fetch-secret.sh "$HERE"/verify-core.sh; do
+  for f in "$SRCDIR"/*.js "$SRCDIR"/*.yaml "$SRCDIR"/fetch-secret.sh "$SRCDIR"/backup-push.sh "$HERE"/verify-core.sh; do
     [ -e "$f" ] || continue
     cp "$f" "$DEST/$(basename "$f")"
     echo "  vendored: $(basename "$f")"

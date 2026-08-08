@@ -155,6 +155,28 @@ async function runDecommission(file, opts = {}) {
   const d = derive(v);
 
   const aegisPath = opts.aegisConfig || env('AEGIS_CONFIG'); // up finds it via the env var too
+  // Protection gate (Can't layer): a protected agent REFUSES teardown before any
+  // discovery or deletion. Unprotect first via the attested policy ceremony.
+  {
+    let prot;
+    try { prot = (require('./policy').loadPolicy() || {}).protectedAgents || []; }
+    catch (e) { prot = null; }
+    if (opts.go && prot === null) {
+      console.error(c.red('decommission REFUSED — cannot read aegis.policy.jsonc to verify protection (fail-closed). Fix the policy file first.'));
+      return 3;
+    }
+    if (Array.isArray(prot) && prot.includes(d.register.name)) {
+      if (!opts.go) {
+        console.log(c.yellow(`\nPROTECTED — "${d.register.name}" is in policy protectedAgents; --go will REFUSE until it is removed.`));
+      } else {
+        console.error(c.red(`\ndecommission REFUSED — "${d.register.name}" is protected by policy (protectedAgents).`));
+        console.error(c.yellow('  To proceed, first run the attested unprotect ceremony:'));
+        console.error(c.yellow(`    fleetctl policy set protectedAgents <remaining-names-or-none> --attest "I approve setting protectedAgents to <value>"`));
+        console.error(c.dim('  (that set also removes the Azure CanNotDelete lock on rg-' + d.register.name + ')'));
+        return 3;
+      }
+    }
+  }
   console.log(c.bold(`\nDecommission "${d.register.name}" (${d.azure.profile}) at ${d.cloudflare.fqdn}`));
   const s = await discover(file, d, accountId, cfToken, aegisPath);
   printPlan(s);
@@ -171,8 +193,11 @@ async function runDecommission(file, opts = {}) {
   }
 
   console.log(c.red(`\n--go: DESTRUCTIVE — deleting every DELETE surface above for "${d.register.name}".`));
+  // Surface 0: bank a final snapshot into the fleet backup store (best-effort,
+  // never blocks -- the store outlives the agent, so this IS the undo button).
+  require('./backup').finalSnapshot(d.register.name);
   await execute(file, d, accountId, cfToken, aegisPath, s);
-  console.log(c.green(`\ndecommission ${d.register.name} complete. Restart Aegis (node aegis.js) so the console drops it.`));
+  console.log(c.green(`\ndecommission ${d.register.name} complete. Refresh fleet in Aegis to drop the card (deregister already updated the config).`));
   return 0;
 }
 

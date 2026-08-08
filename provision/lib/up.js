@@ -12,6 +12,7 @@ const cfg = require('./aegisconfig');
 const policy = require('./policy');
 const budget = require('./budget');
 const { runRegister } = require('./register');
+const backup = require('./backup');
 
 const bad = (s) => !s || /[<>]/.test(s);                  // empty, or still a <placeholder>
 const SET = (x) => (x ? (/[<>]/.test(x) ? c.red('placeholder <…>') : c.green('set')) : c.red('MISSING'));
@@ -256,14 +257,28 @@ async function runUp(file, opts = {}) {
 
     // 5. Deploy — billable, last
     step(5, `Deploy the VM (BILLABLE) — ${R.d.azure.resourceGroup} / ${R.d.azure.vmName}`);
+    const backupAcct = backup.resolveAccount();
+    if (!backupAcct) console.log(c.dim('  backup: store absent — agent ships without the nightly timer target (run `fleetctl backup init`, then this wires in at the next build)'));
     const ok5 = runScript(R.bash, ['scripts/deploy.sh', v.profile, v.name], {
       cwd: R.fleetRoot,
       env: deployEnv(v, R.pubkey, tunnelToken),
+      BACKUP_ACCOUNT: backupAcct,
     });
-    if (!ok5) { console.log(c.red('\nStep 5 failed (deploy.sh). CF + token + registration are done; re-run deploy.sh, or decommission to clean up.')); return 1; }
+    if (!ok5) {
+      // Ghost-card guard: register ran before deploy (in-process token handoff), so a
+      // failed deploy must deregister -- otherwise Aegis shows a card with nothing behind it.
+      try {
+        const { runDeregister } = require('./register');
+        if (typeof runDeregister === 'function') runDeregister(v.name, { aegisConfig: opts.aegisConfig });
+        console.log(c.yellow('  deregistered from Aegis (no ghost card). CF front door + token remain for retry.'));
+      } catch (e) { console.log(c.yellow('  deregister after failed deploy also failed: ' + e.message)); }
+      console.log(c.red('\nStep 5 failed (deploy.sh). Fix and re-run up --go, or decommission to sweep the CF surfaces.'));
+      return 1;
+    }
 
     console.log(c.green(`\nup --go OK — ${v.name} provisioned. cloud-init is building the image (~4-8 min).`));
     console.log(c.green('  The VM is WAITING for its vault seed — it self-configures once seeded (no SSH).'));
+    backup.ensureAgentBackup(v.name);
     console.log(c.bold('  NEXT (within ~10 min): seed the vault so it comes up on its own →'));
     console.log(c.bold('    fleetctl set-secrets ' + v.name + '   ') + c.dim('(enrolls TOTP + writes the API keys)'));
     console.log(c.dim('  Wait ~1 min first (Key Vault role propagation), then set-secrets. Do NOT re-run up --go'));

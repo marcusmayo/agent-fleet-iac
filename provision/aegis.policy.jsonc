@@ -6,6 +6,11 @@
   // lands. Edit the numbers here to change the caps.
 
   "maxFleet": 6,                   // hard ceiling on total registered agents
+
+  // Agents that decommission MUST refuse to tear down. Changing this list is an
+  // attested policy.set (value = comma-separated names, or `none` to clear); the
+  // set also syncs an Azure CanNotDelete lock onto each protected rg-<name>.
+  "protectedAgents": [],
   "maxBatch": 2,                   // most agents a single provisioning request may create
   "allowedRegions": ["eastus2"],   // agents may ONLY be stood up in these Azure regions
   "defaultRegion": "eastus2",      // region offered by the panel when a request omits one

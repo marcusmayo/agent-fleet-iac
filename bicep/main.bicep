@@ -46,6 +46,9 @@ param repoRef string = ''
 @description('AAD object id of the deploying principal, granted Key Vault Secrets Officer so it can seed the vault post-apply (az keyvault secret set). Now ALL profiles have a vault, so pass this for every agent. Get it via: az ad signed-in-user show --query id -o tsv')
 param deployerObjectId string = ''
 
+@description('Fleet backup store account name; empty disables the nightly backup timer target.')
+param backupAccount string = ''
+
 var rgName = 'rg-${agentName}'
 
 resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
@@ -73,6 +76,7 @@ module agentVm 'modules/vm.bicep' = {
     repoUrl: repoUrl
     repoRef: repoRef
     deployerObjectId: deployerObjectId
+    backupAccount: backupAccount
   }
 }
 

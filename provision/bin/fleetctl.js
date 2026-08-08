@@ -20,6 +20,8 @@ Usage:
   fleetctl decommission <contract.agent.jsonc> [--go] [--aegis-config <path>]
   fleetctl policy   [show] | set <key> <value> --attest "I approve setting <key> to <value>"
   fleetctl set-secrets <agent>
+  fleetctl backup   init | list <agent> | snapshot <agent>
+  fleetctl restore  <agent> [--blob <name>]
   fleetctl --help
 
 Commands:
@@ -67,6 +69,16 @@ Commands:
             from \$ANTHROPIC_API_KEY + \$OPENROUTER_API_KEY in the environment (never
             passed as args). App-TOTP is gone (edge-only auth) — nothing to enroll.
             Requires az + Secrets Officer on the vault.
+
+  backup    Fleet backup store (rg-fleet-backups; one container per agent; nightly
+            timer on each fleet-provisioned VM pushes state + volumes via MSI).
+            init      create/refresh the store, 14-day retention, deployer data role.
+            list      show an agent's backup blobs (newest last).
+            snapshot  force a push now (az vm run-command; VM must be running).
+            Decommission --go banks a final snapshot as surface 0 automatically.
+
+  restore   Pull a backup onto a (re)provisioned agent and restart its containers
+            (az vm run-command; VM must be running). Default = newest blob.
 
   --aegis-config <path>   Path to aegis.config.json (else \$AEGIS_CONFIG, \$AEGIS_DIR,
                           or <fleet-parent>/aegis/aegis.config.json).
@@ -124,6 +136,20 @@ async function main(argv) {
     if (!file) { console.error(c.red('set-secrets: missing <agent>')); return 2; }
     return runSetSecrets(file);
   }
+  if (cmd === 'backup') {
+    const sub = args[1];
+    const bk = require('../lib/backup');
+    if (sub === 'init') { const { loadPolicy } = require('../lib/policy'); let pol = null; try { pol = loadPolicy(); } catch { /* defaults */ } return bk.runBackupInit(pol); }
+    if (sub === 'list' && args[2]) return bk.runBackupList(args[2]);
+    if (sub === 'snapshot' && args[2]) return bk.runBackupSnapshot(args[2]);
+    console.error(c.red('backup: usage — fleetctl backup init | list <agent> | snapshot <agent>')); return 2;
+  }
+  if (cmd === 'restore') {
+    const agent = args[1];
+    if (!agent) { console.error(c.red('restore: missing <agent>')); return 2; }
+    const bi = args.indexOf('--blob');
+    return require('../lib/backup').runRestore(agent, { blob: bi > -1 ? args[bi + 1] : undefined });
+  }
   if (cmd === 'up') {
     if (!file) { console.error(c.red('up: missing <contract.agent.jsonc>')); return 2; }
     return runUp(file, { go: flags.has('--go'), update: flags.has('--update'), aegisConfig });
@@ -144,7 +170,7 @@ async function main(argv) {
       const pos = rest.slice(1).filter((a, i, arr) => a !== '--attest' && arr[i - 1] !== '--attest');
       try {
         const r = setPolicy({ key: pos[0], value: pos[1], attest });
-        console.log(c.green(`policy: ${r.key} ${JSON.stringify(r.from)} -> ${JSON.stringify(r.to)}`) + c.dim(`  (${r.path}; ledgered ${r.ledgered})`) + (r.syncOutcome ? '\n' + (r.syncOutcome.startsWith('ok') ? c.green('azure budget sync ' + r.syncOutcome) : c.red('azure budget sync ' + r.syncOutcome)) : ''));
+        console.log(c.green(`policy: ${r.key} ${JSON.stringify(r.from)} -> ${JSON.stringify(r.to)}`) + c.dim(`  (${r.path}; ledgered ${r.ledgered})`) + (r.syncOutcome ? '\n' + (r.syncOutcome.startsWith('ok') ? c.green('azure sync ' + r.syncOutcome) : c.red('azure sync ' + r.syncOutcome)) : ''));
         return 0;
       } catch (e) { console.error(c.red(String(e.message || e))); return 2; }
     }

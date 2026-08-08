@@ -7,6 +7,7 @@ const { stripJsonc } = require('./jsonc');
 // Built-in defaults so the gate is safe even if the policy file is missing.
 const DEFAULTS = {
   maxFleet: 6,
+  protectedAgents: [],
   maxBatch: 2,
   allowedRegions: ['eastus2'],
   defaultRegion: 'eastus2',
@@ -73,6 +74,7 @@ const SETTABLE = {
   allowedRegions: { file: 'allowedRegions',      kind: 'list' },   // comma-separated full replacement
   defaultRegion:  { file: 'defaultRegion',       kind: 'str', re: /^[a-z0-9]{3,30}$/ },
   budgetName:     { file: 'budgetName',          kind: 'str', re: /^[A-Za-z0-9_-]{1,63}$/ },
+  protectedAgents:{ file: 'protectedAgents',     kind: 'list', itemRe: /^[a-z][a-z0-9-]{1,23}$/, itemDesc: 'agent names', allowEmpty: true },   // `none` clears
 };
 
 // Parse + shape-validate; throws with the ledgerable reason on bad input.
@@ -87,9 +89,12 @@ function coerce(key, spec, value) {
     if (!spec.re.test(s)) throw new Error(`${key} "${s}" fails ${spec.re}`);
     return s;
   }
+  if (spec.allowEmpty && String(value || '').trim().toLowerCase() === 'none') return [];
+  const itemRe = spec.itemRe || /^[a-z0-9]{3,30}$/;
+  const itemDesc = spec.itemDesc || 'azure region names';
   const list = [...new Set(String(value || '').split(',').map((s) => s.trim()).filter(Boolean))];
-  if (!list.length || list.some((s) => !/^[a-z0-9]{3,30}$/.test(s))) {
-    throw new Error(`${key} must be a comma-separated list of azure region names (got "${value}")`);
+  if (!list.length || list.some((s) => !itemRe.test(s))) {
+    throw new Error(`${key} must be a comma-separated list of ${itemDesc} (got "${value}"${spec.allowEmpty ? ', or `none` to clear' : ''})`);
   }
   return list;
 }
@@ -176,21 +181,38 @@ function setPolicy({ key, value, attest, explicit }) {
   // above is the enforcement and always lands; syncing the Cost Management budget
   // object is best-effort, FAIL-LOUD-NON-BLOCKING -- its outcome rides the ledger.
   let syncOutcome;
+  const { spawnSync } = require('node:child_process');
+  // Node >=20.12 (CVE-2024-27980) forbids spawning .cmd without a shell (EINVAL),
+  // and args-array+shell triggers DEP0190 -- so on Windows we build ONE command
+  // string (every value charset-gated) and run it with shell:true.
+  const runAz = (azArgs) => {
+    const r2 = process.platform === 'win32'
+      ? spawnSync('az ' + azArgs.map((a) => '"' + a + '"').join(' '), { shell: true, encoding: 'utf8', timeout: 45000 })
+      : spawnSync('az', azArgs, { encoding: 'utf8', timeout: 45000 });
+    const out = (r2.stdout || '').trim();
+    const errLines = ((r2.stderr || '') + (r2.error ? String(r2.error) : '')).split('\n').map(s => s.trim()).filter(Boolean);
+    const err = (errLines.find(l => !l.startsWith('WARNING')) || errLines[0] || 'no output').slice(0, 200);
+    return { status: r2.status, out, err };
+  };
+  // Azure resource-lock sync (2nd, structural layer of the protection control):
+  // the CLI refusal in decommission is the gate and always lands; the CanNotDelete
+  // lock on each protected rg-<name> is best-effort, FAIL-LOUD-NON-BLOCKING.
+  if (spec.file === 'protectedAgents') {
+    const prev = Array.isArray(before) ? before : [];
+    const added = next.filter((n) => !prev.includes(n));
+    const removed = prev.filter((n) => !next.includes(n));
+    const notes = [];
+    for (const n of added) {
+      const r = runAz(['lock', 'create', '--name', 'fleet-protect', '-g', 'rg-' + n, '--lock-type', 'CanNotDelete', '-o', 'none']);
+      notes.push(r.status === 0 ? `locked rg-${n}` : `lock rg-${n} failed: ${r.err}`);
+    }
+    for (const n of removed) {
+      const r = runAz(['lock', 'delete', '--name', 'fleet-protect', '-g', 'rg-' + n]);
+      notes.push(r.status === 0 ? `unlocked rg-${n}` : `unlock rg-${n} failed: ${r.err}`);
+    }
+    if (notes.length) syncOutcome = notes.join('; ');
+  }
   if (spec.file === 'maxMonthlyBudgetUsd') {
-    const { spawnSync } = require('node:child_process');
-    // Node >=20.12 (CVE-2024-27980) forbids spawning .cmd without a shell (EINVAL),
-    // and args-array+shell triggers DEP0190 -- so on Windows we build ONE command
-    // string (every value charset-gated above/below) and run it with shell:true.
-    const runAz = (azArgs) => {
-      const r2 = process.platform === 'win32'
-        ? spawnSync('az ' + azArgs.map((a) => '"' + a + '"').join(' '), { shell: true, encoding: 'utf8', timeout: 45000 })
-        : spawnSync('az', azArgs, { encoding: 'utf8', timeout: 45000 });
-      const out = (r2.stdout || '').trim();
-      // az prefixes preview/deprecation WARNINGs on stderr -- surface the first REAL line.
-      const errLines = ((r2.stderr || '') + (r2.error ? String(r2.error) : '')).split('\n').map(s => s.trim()).filter(Boolean);
-      const err = (errLines.find(l => !l.startsWith('WARNING')) || errLines[0] || 'no output').slice(0, 200);
-      return { status: r2.status, out, err };
-    };
     if (!/^[A-Za-z0-9_-]{1,63}$/.test(pol.budgetName)) {
       syncOutcome = 'failed: budgetName in policy file fails safe charset [A-Za-z0-9_-]';
     } else {
