@@ -60,6 +60,7 @@ Commands:
             value in place (comments preserved), verifies the re-read, and appends
             the attempt -- approved or refused -- to provision/policy-audit.jsonl.
             Keys: maxFleet maxBatch budget allowedRegions defaultRegion budgetName.
+            show --json prints the machine-readable policy (Aegis reads this).
             Cross-checks fail closed (batch<=fleet; defaultRegion must stay inside
             allowedRegions). Attestation must read exactly: I approve setting <key> to <value>
 
@@ -161,6 +162,11 @@ async function main(argv) {
 
   if (cmd === 'policy') {
     const { showPolicy, setPolicy } = require('../lib/policy');
+    if ((args[1] === 'show' || !args[1] || args[1] === '--json') && args.includes('--json')) {
+      const { loadPolicy } = require('../lib/policy');
+      let pol; try { pol = loadPolicy(); } catch (e) { console.error(c.red('policy --json: ' + e.message)); return 2; }
+      console.log(JSON.stringify(pol)); return 0;
+    }
     const rest = args.slice(1);
     const sub = rest[0];
     if (!sub || sub === 'show') { console.log(showPolicy()); return 0; }
