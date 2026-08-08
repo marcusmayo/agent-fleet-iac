@@ -19,6 +19,7 @@ Usage:
   fleetctl deregister <name | contract.agent.jsonc> [--aegis-config <path>]
   fleetctl decommission <contract.agent.jsonc> [--go] [--aegis-config <path>]
   fleetctl policy   [show] | set <key> <value> --attest "I approve setting <key> to <value>"
+  fleetctl policy   protect <name> | unprotect <name>  --attest "I approve <verb>ing <name>"
   fleetctl set-secrets <agent>
   fleetctl backup   init | list <agent> | snapshot <agent>
   fleetctl restore  <agent> [--blob <name>]
@@ -61,6 +62,9 @@ Commands:
             the attempt -- approved or refused -- to provision/policy-audit.jsonl.
             Keys: maxFleet maxBatch budget allowedRegions defaultRegion budgetName.
             show --json prints the machine-readable policy (Aegis reads this).
+            protect/unprotect <name> use the short per-agent grammar
+            (I approve protecting <name> / I approve unprotecting <name>) and
+            sync the Azure CanNotDelete lock; set protectedAgents stays for bulk/none.
             Cross-checks fail closed (batch<=fleet; defaultRegion must stay inside
             allowedRegions). Attestation must read exactly: I approve setting <key> to <value>
 
@@ -161,7 +165,18 @@ async function main(argv) {
   }
 
   if (cmd === 'policy') {
-    const { showPolicy, setPolicy } = require('../lib/policy');
+    const { showPolicy, setPolicy, setProtection } = require('../lib/policy');
+    if (args[1] === 'protect' || args[1] === 'unprotect') {
+      const name = args[2];
+      const ai = args.indexOf('--attest');
+      const attest = ai > -1 ? args[ai + 1] : '';
+      if (!name) { console.error(c.red(`policy ${args[1]}: missing <name>`)); return 2; }
+      try {
+        const r = setProtection({ name, on: args[1] === 'protect', attest });
+        console.log(c.green(`policy: protectedAgents ${JSON.stringify(r.from)} -> ${JSON.stringify(r.to)}`) + c.dim(`  (${r.path}; ledgered ${r.ledgered})`) + (r.noop ? c.dim('  [no-op]') : '') + (r.syncOutcome ? '\n' + (r.syncOutcome.startsWith('ok') ? c.green('azure sync ' + r.syncOutcome) : c.red('azure sync ' + r.syncOutcome)) : ''));
+        return 0;
+      } catch (e) { console.error(c.red(e.message)); return 3; }
+    }
     if ((args[1] === 'show' || !args[1] || args[1] === '--json') && args.includes('--json')) {
       const { loadPolicy } = require('../lib/policy');
       let pol; try { pol = loadPolicy(); } catch (e) { console.error(c.red('policy --json: ' + e.message)); return 2; }

@@ -67,6 +67,20 @@ function checkProvision(policy, { currentFleet = [], names = [], region } = {}) 
 // else refuses, mutates nothing, and the refusal is still LEDGERED. Every
 // attempt appends {ts, actor, deployerObjectId, action, key, from, to, phrase,
 // outcome} to provision/policy-audit.jsonl — append-only attestation evidence.
+const { spawnSync } = require('node:child_process');
+// Node >=20.12 (CVE-2024-27980) forbids spawning .cmd without a shell (EINVAL),
+// and args-array+shell triggers DEP0190 -- so on Windows we build ONE command
+// string (every value charset-gated) and run it with shell:true.
+const runAz = (azArgs) => {
+  const r2 = process.platform === 'win32'
+    ? spawnSync('az ' + azArgs.map((a) => '"' + a + '"').join(' '), { shell: true, encoding: 'utf8', timeout: 45000 })
+    : spawnSync('az', azArgs, { encoding: 'utf8', timeout: 45000 });
+  const out = (r2.stdout || '').trim();
+  const errLines = ((r2.stderr || '') + (r2.error ? String(r2.error) : '')).split('\n').map(s => s.trim()).filter(Boolean);
+  const err = (errLines.find(l => !l.startsWith('WARNING')) || errLines[0] || 'no output').slice(0, 200);
+  return { status: r2.status, out, err };
+};
+
 const SETTABLE = {
   maxFleet:       { file: 'maxFleet',            kind: 'int' },
   maxBatch:       { file: 'maxBatch',            kind: 'int' },
@@ -147,6 +161,45 @@ function showPolicy(explicit) {
   return lines.join('\n');
 }
 
+
+// Single-name protection ceremony: `I approve protecting <name>` / `I approve
+// unprotecting <name>` -- short, order-free, one agent per attestation. The
+// generic `set protectedAgents` grammar remains for bulk edits / `none`.
+// Same guarantees as setPolicy: comment-preserving token swap, re-read verify,
+// every attempt ledgered, Azure CanNotDelete lock synced best-effort.
+function setProtection({ name, on, attest, explicit }) {
+  const verb = on ? 'protect' : 'unprotect';
+  if (!/^[a-z][a-z0-9-]{1,23}$/.test(String(name || ''))) throw new Error(`policy ${verb}: invalid agent name`);
+  const p = resolvePolicyPath(explicit);
+  if (!p) throw new Error(`policy ${verb}: no aegis.policy.jsonc found -- the gate file must exist to be edited`);
+  const pol = loadPolicy(p);
+  const before = Array.isArray(pol.protectedAgents) ? pol.protectedAgents : [];
+  const required = `I approve ${on ? 'protecting' : 'unprotecting'} ${name}`;
+  if ((attest || '').trim() !== required) {
+    ledger(p, { action: 'policy.' + verb, key: 'protectedAgents', name, from: before, phrase: attest || '', outcome: 'refused: attestation mismatch' });
+    throw new Error(`policy ${verb} REFUSED -- attestation must read exactly:\n  --attest "${required}"`);
+  }
+  const has = before.includes(name);
+  if (on === has) {
+    const rec = ledger(p, { action: 'policy.' + verb, key: 'protectedAgents', name, from: before, to: before, phrase: attest, outcome: 'ok (no-op: already ' + (on ? 'protected' : 'unprotected') + ')' });
+    return { path: p, from: before, to: before, ledgered: rec.ts, noop: true };
+  }
+  const next = on ? before.concat([name]) : before.filter((n) => n !== name);
+  const src2 = fs.readFileSync(p, 'utf8');
+  const token = `"protectedAgents": ${JSON.stringify(before)}`;
+  const hits = src2.split(token).length - 1;
+  if (hits !== 1) throw new Error(`policy ${verb} aborted: expected exactly one \`${token}\` in ${p}, found ${hits} -- edit by hand`);
+  fs.writeFileSync(p, src2.replace(token, `"protectedAgents": ${JSON.stringify(next)}`));
+  const after = loadPolicy(p).protectedAgents;
+  if (JSON.stringify(after) !== JSON.stringify(next)) throw new Error(`policy ${verb} verification failed: re-read protectedAgents=${JSON.stringify(after)}`);
+  const r = on
+    ? runAz(['lock', 'create', '--name', 'fleet-protect', '-g', 'rg-' + name, '--lock-type', 'CanNotDelete', '-o', 'none'])
+    : runAz(['lock', 'delete', '--name', 'fleet-protect', '-g', 'rg-' + name]);
+  const syncOutcome = r.status === 0 ? `ok: ${on ? 'locked' : 'unlocked'} rg-${name}` : `${on ? 'lock' : 'unlock'} rg-${name} failed: ${r.err}`;
+  const rec = ledger(p, { action: 'policy.' + verb, key: 'protectedAgents', name, from: before, to: next, phrase: attest, outcome: 'ok', syncOutcome });
+  return { path: p, from: before, to: next, ledgered: rec.ts, syncOutcome };
+}
+
 function setPolicy({ key, value, attest, explicit }) {
   const spec = SETTABLE[key];
   if (!spec) throw new Error(`policy set: unknown key "${key}" -- settable: ${Object.keys(SETTABLE).join(', ')}`);
@@ -181,19 +234,6 @@ function setPolicy({ key, value, attest, explicit }) {
   // above is the enforcement and always lands; syncing the Cost Management budget
   // object is best-effort, FAIL-LOUD-NON-BLOCKING -- its outcome rides the ledger.
   let syncOutcome;
-  const { spawnSync } = require('node:child_process');
-  // Node >=20.12 (CVE-2024-27980) forbids spawning .cmd without a shell (EINVAL),
-  // and args-array+shell triggers DEP0190 -- so on Windows we build ONE command
-  // string (every value charset-gated) and run it with shell:true.
-  const runAz = (azArgs) => {
-    const r2 = process.platform === 'win32'
-      ? spawnSync('az ' + azArgs.map((a) => '"' + a + '"').join(' '), { shell: true, encoding: 'utf8', timeout: 45000 })
-      : spawnSync('az', azArgs, { encoding: 'utf8', timeout: 45000 });
-    const out = (r2.stdout || '').trim();
-    const errLines = ((r2.stderr || '') + (r2.error ? String(r2.error) : '')).split('\n').map(s => s.trim()).filter(Boolean);
-    const err = (errLines.find(l => !l.startsWith('WARNING')) || errLines[0] || 'no output').slice(0, 200);
-    return { status: r2.status, out, err };
-  };
   // Azure resource-lock sync (2nd, structural layer of the protection control):
   // the CLI refusal in decommission is the gate and always lands; the CanNotDelete
   // lock on each protected rg-<name> is best-effort, FAIL-LOUD-NON-BLOCKING.
@@ -243,4 +283,4 @@ function setPolicy({ key, value, attest, explicit }) {
   return { path: p, key: spec.file, from: before, to: next, ledgered: rec.ts, syncOutcome };
 }
 
-module.exports = { DEFAULTS, resolvePolicyPath, loadPolicy, checkProvision, showPolicy, setPolicy, attestPhrase };
+module.exports = { DEFAULTS, resolvePolicyPath, loadPolicy, checkProvision, showPolicy, setPolicy, setProtection, attestPhrase };

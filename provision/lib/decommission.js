@@ -171,7 +171,7 @@ async function runDecommission(file, opts = {}) {
       } else {
         console.error(c.red(`\ndecommission REFUSED — "${d.register.name}" is protected by policy (protectedAgents).`));
         console.error(c.yellow('  To proceed, first run the attested unprotect ceremony:'));
-        console.error(c.yellow(`    fleetctl policy set protectedAgents <remaining-names-or-none> --attest "I approve setting protectedAgents to <value>"`));
+        console.error(c.yellow(`    fleetctl policy unprotect ${d.register.name} --attest "I approve unprotecting ${d.register.name}"`));
         console.error(c.dim('  (that set also removes the Azure CanNotDelete lock on rg-' + d.register.name + ')'));
         return 3;
       }
