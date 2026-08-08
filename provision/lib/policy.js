@@ -210,7 +210,7 @@ function setPolicy({ key, value, attest, explicit }) {
       const r = runAz(['lock', 'delete', '--name', 'fleet-protect', '-g', 'rg-' + n]);
       notes.push(r.status === 0 ? `unlocked rg-${n}` : `unlock rg-${n} failed: ${r.err}`);
     }
-    if (notes.length) syncOutcome = notes.join('; ');
+    if (notes.length) syncOutcome = (notes.some((n) => /failed/.test(n)) ? '' : 'ok: ') + notes.join('; ');
   }
   if (spec.file === 'maxMonthlyBudgetUsd') {
     if (!/^[A-Za-z0-9_-]{1,63}$/.test(pol.budgetName)) {

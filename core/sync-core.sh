@@ -18,7 +18,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"        # the core/ dir
 [ -d "$HERE" ] || { echo "FATAL: core dir not found: $HERE"; exit 1; }
 CORE_REF="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 # Stamp honesty: a sync from a dirty tree is not that commit -- mark it.
-git -C "$HERE" diff --quiet 2>/dev/null || CORE_REF="${CORE_REF}+dirty"
+git -C "$HERE" diff --quiet -- . 2>/dev/null || CORE_REF="${CORE_REF}+dirty"
 
 vendor() {
   SRCDIR="$1"; DEST="$2"; MANIFEST="$3"
