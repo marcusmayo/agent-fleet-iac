@@ -58,5 +58,11 @@ runcmd:
   - 'printf "[Unit]\nDescription=Fleet agent backup push\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/agent-backup push\n" > /etc/systemd/system/agent-backup.service'
   - 'printf "[Unit]\nDescription=Daily fleet agent backup\n\n[Timer]\nOnCalendar=daily\nRandomizedDelaySec=1800\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n" > /etc/systemd/system/agent-backup.timer'
   - 'systemctl daemon-reload && systemctl enable --now agent-backup.timer || echo "backup timer enable failed (non-fatal)"'
+  # --- Fleet intake: wrapper + 2-min timer (no-ops on profiles without scripts/intake.js) ---
+  # Same self-detecting base64 pattern as the backup wrapper -- no shell-quoting to break.
+  - 'echo IyEvYmluL2Jhc2gKQUQ9L2hvbWUvYWdlbnRhZG1pbi9hZ2VudApbIC1kICIkQUQvc2NhZmZvbGQiIF0gJiYgQUQ9IiRBRC9zY2FmZm9sZCIKUD0iJChncmVwIC1FICdeQUdFTlRfUFJPRklMRT0nICIkQUQvLnByb3Zpc2lvbi1mbGFncyIgMj4vZGV2L251bGwgfCBoZWFkIC0xIHwgY3V0IC1kPSAtZjIpIgpbIC1uICIkUCIgXSB8fCBleGl0IDAKQz0iJHtQfS13ZWJjaGF0Igpkb2NrZXIgZXhlYyAiJEMiIHRlc3QgLWUgL2FwcC9zY3JpcHRzL2ludGFrZS5qcyAyPi9kZXYvbnVsbCB8fCBleGl0IDAKZXhlYyBkb2NrZXIgZXhlYyAiJEMiIG5vZGUgL2FwcC9zY3JpcHRzL2ludGFrZS5qcwo= | base64 -d > /usr/local/bin/agent-intake && chmod 0755 /usr/local/bin/agent-intake'
+  - 'printf "[Unit]\nDescription=Fleet agent intake sweep\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/agent-intake\n" > /etc/systemd/system/agent-intake.service'
+  - 'printf "[Unit]\nDescription=Fleet agent intake timer\n\n[Timer]\nOnBootSec=90\nOnUnitActiveSec=120\n\n[Install]\nWantedBy=timers.target\n" > /etc/systemd/system/agent-intake.timer'
+  - 'systemctl daemon-reload && systemctl enable --now agent-intake.timer || echo "intake timer enable failed (non-fatal)"'
   - "{ dpkg-query -W docker.io docker-compose-v2 git cloudflared; } > /var/log/agent-provision-versions.log 2>&1"
 final_message: "agent (__AGENT_PROFILE__) cloud-init complete after $UPTIME s -- it self-bootstraps from its Key Vault; seed with 'fleetctl set-secrets <agent>' if you haven't. Logs: /var/log/agent-bootstrap.log"
