@@ -19,7 +19,7 @@ function preview(v) {
   if (d.azure.wantsVault) {
     kv('key vault', `${v.name}-kv-<suffix>  (RBAC; operator secrets set post-apply)`);
     kv('identity', `${v.name}-identity  (user-assigned MSI: KV Secrets User + Storage Blob Contributor)`);
-    kv('backup', `${v.name}sa<suffix>  (identity-based blob backup)`);
+    if (d.azure.profile === 'castor') kv('backup', `${v.name.replace(/-/g, '').slice(0, 17)}sa<suffix>  (identity-based blob backup)`);
   }
   kv('repo', `${d.azure.repoUrl} @ ${d.azure.repoRef}`);
   kv('param file', d.azure.paramFile);

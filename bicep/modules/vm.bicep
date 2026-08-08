@@ -35,7 +35,10 @@ var wantsVault = true
 var wantsBackup = agentProfile == 'castor'
 var suffix = substring(uniqueString(subscription().id, agentName), 0, 5)
 var kvName = '${agentName}-kv-${suffix}'
-var saName = toLower('${agentName}sa${suffix}')
+// Storage-account names: 3-24 chars, lowercase letters + digits ONLY (no hyphens).
+// Strip hyphens and cap the base at 17 so base + 'sa'(2) + suffix(5) <= 24.
+// No-op for hyphen-free names — heimdall's live SA re-derives identically.
+var saName = toLower('${take(replace(agentName, '-', ''), 17)}sa${suffix}')
 var uaiName = '${agentName}-identity'
 // Built-in role definition GUIDs (stable across clouds).
 var roleKvSecretsUser = '4633458b-17de-408a-b874-0445c86b69e6'
