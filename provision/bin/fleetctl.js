@@ -61,10 +61,12 @@ Commands:
             Cross-checks fail closed (batch<=fleet; defaultRegion must stay inside
             allowedRegions). Attestation must read exactly: I approve setting <key> to <value>
 
-  set-secrets  Seed an agent's Key Vault with the three bootstrap secrets so it can
-            self-configure at first boot. TOTP is generated here (enroll the printed QR /
-            secret); the two API keys are read from \$ANTHROPIC_API_KEY + \$OPENROUTER_API_KEY
-            in the environment (never passed as args). Requires az + Secrets Officer on the vault.
+  set-secrets  Seed an agent's Key Vault with the bootstrap secrets its profile
+            fetches at first boot (keel: anthropic-api-key + openrouter-api-key;
+            castor: model-api-key + vision-api-key + anthropic-api-key). Keys are read
+            from \$ANTHROPIC_API_KEY + \$OPENROUTER_API_KEY in the environment (never
+            passed as args). App-TOTP is gone (edge-only auth) — nothing to enroll.
+            Requires az + Secrets Officer on the vault.
 
   --aegis-config <path>   Path to aegis.config.json (else \$AEGIS_CONFIG, \$AEGIS_DIR,
                           or <fleet-parent>/aegis/aegis.config.json).

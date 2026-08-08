@@ -1,5 +1,7 @@
 'use strict';
 const { c, runCapture } = require('./util');
+const path = require('path');
+const { loadContract } = require('./contract');
 
 // The single Key Vault in the agent's resource group (rg-<agent>).
 function resolveVault(agent) {
@@ -17,10 +19,21 @@ function setSecret(vault, name, value) {
   return r.ok ? { ok: true } : { ok: false, reason: (r.stderr || 'az returned non-zero').split('\n')[0] };
 }
 
-// Seed an agent's Key Vault with the two bootstrap secrets. The API keys come from the
+// Seed an agent's Key Vault with the bootstrap secrets its profile's first boot
+// fetches — mechanism in core, names per profile (PROFILE_SECRETS). The API keys come from the
 // environment (never CLI args, so they don't land in shell history / process listings as
 // fleetctl args). Re-running overwrites the keys (rotation). App-TOTP was removed with the
 // edge-only auth migration (Cloudflare Access is the gate); no TOTP is seeded or shown.
+// Vault secret names each profile's bootstrap fetches at first boot. keel:
+// standardized pair (proven example-02/03/04). castor: setup-wizard-era names its
+// bootstrap dies on when absent — model-api-key feeds the OpenRouter gateway lane,
+// vision-api-key the direct-Anthropic vision path; anthropic-api-key doubles as
+// castor's optional web-direct enabler, so it is seeded for both profiles.
+const PROFILE_SECRETS = {
+  keel: (anth, ork) => [['anthropic-api-key', anth], ['openrouter-api-key', ork]],
+  castor: (anth, ork) => [['model-api-key', ork], ['vision-api-key', anth], ['anthropic-api-key', anth]],
+};
+
 function runSetSecrets(agent) {
   console.log(c.cyan(`set-secrets  ${agent}`));
 
@@ -39,14 +52,22 @@ function runSetSecrets(agent) {
     return 2;
   }
 
+  const cFile = path.join(path.resolve(__dirname, '..', '..'), 'agents', `${agent}.agent.jsonc`);
+  const lc = loadContract(cFile);
+  if (!lc.ok) {
+    console.log(c.red('\nset-secrets ABORT — cannot read the contract to determine the profile:'));
+    for (const e of lc.errors) console.log('  - ' + e);
+    return 2;
+  }
+  const mkWrites = PROFILE_SECRETS[lc.value.profile];
+  if (!mkWrites) { console.log(c.red(`\nset-secrets ABORT — no secret map for profile '${lc.value.profile}'`)); return 2; }
+  const writes = mkWrites(anth, ork);
+  console.log(c.dim(`  profile: ${lc.value.profile} — seeding ${writes.map(w => w[0]).join(', ')}`));
+
   const v = resolveVault(agent);
   if (!v.ok) { console.log(c.red('\nset-secrets ABORT — ' + v.reason)); return 2; }
   console.log(c.dim(`  vault: ${v.vault}  (resource group ${v.rg})`));
 
-  const writes = [
-    ['anthropic-api-key', anth],
-    ['openrouter-api-key', ork],
-  ];
   for (const [name, value] of writes) {
     const r = setSecret(v.vault, name, value);
     if (!r.ok) { console.log(c.red(`\nset-secrets FAILED writing '${name}': ${r.reason}`)); return 1; }
