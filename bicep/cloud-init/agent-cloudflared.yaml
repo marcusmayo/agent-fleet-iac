@@ -53,7 +53,8 @@ runcmd:
   # up on its own. If it aborts (never seeded), SSH in and run bootstrap.sh by hand.
   - sudo -u __ADMIN_USER__ bash "$AGENT_DIR/infra/scripts/bootstrap.sh" > /var/log/agent-bootstrap.log 2>&1 || echo "bootstrap did not complete unattended -- SSH in and run infra/scripts/bootstrap.sh (see /var/log/agent-bootstrap.log)" | tee -a /var/log/agent-bootstrap.log
   # --- Fleet backup: wrapper + daily timer (script no-ops when BACKUP_ACCOUNT is empty) ---
-  - 'printf "#!/bin/bash\nexec bash %s/scripts/backup-push.sh \"$@\"\n" "$AGENT_DIR" > /usr/local/bin/agent-backup && chmod 0755 /usr/local/bin/agent-backup'
+  # Wrapper is base64-decoded (self-detecting agent root) -- no shell-quoting to break.
+  - 'echo IyEvYmluL2Jhc2gKQUQ9L2hvbWUvYWdlbnRhZG1pbi9hZ2VudApbIC1kICIkQUQvc2NhZmZvbGQiIF0gJiYgQUQ9IiRBRC9zY2FmZm9sZCIKZXhlYyBiYXNoICIkQUQvc2NyaXB0cy9iYWNrdXAtcHVzaC5zaCIgIiRAIgo= | base64 -d > /usr/local/bin/agent-backup && chmod 0755 /usr/local/bin/agent-backup'
   - 'printf "[Unit]\nDescription=Fleet agent backup push\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/agent-backup push\n" > /etc/systemd/system/agent-backup.service'
   - 'printf "[Unit]\nDescription=Daily fleet agent backup\n\n[Timer]\nOnCalendar=daily\nRandomizedDelaySec=1800\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n" > /etc/systemd/system/agent-backup.timer'
   - 'systemctl daemon-reload && systemctl enable --now agent-backup.timer || echo "backup timer enable failed (non-fatal)"'
