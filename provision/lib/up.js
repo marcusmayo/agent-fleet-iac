@@ -257,12 +257,12 @@ async function runUp(file, opts = {}) {
 
     // 5. Deploy — billable, last
     step(5, `Deploy the VM (BILLABLE) — ${R.d.azure.resourceGroup} / ${R.d.azure.vmName}`);
-    const backupAcct = backup.resolveAccount();
-    if (!backupAcct) console.log(c.dim('  backup: store absent — agent ships without the nightly timer target (run `fleetctl backup init`, then this wires in at the next build)'));
+    let backupAcct = backup.resolveAccount();
+    if (!backupAcct) backupAcct = backup.resolveAccount(); // one retry: a transient az hiccup here once baked an empty BACKUP_ACCOUNT into a live agent (permanently no-op nightly backup)
+    if (!backupAcct) console.log(c.yellow('  backup: BACKUP_ACCOUNT resolved EMPTY — fine if the fleet store is absent by design; if `fleetctl backup list <agent>` works, Ctrl+C and re-run, because this build ships a no-op backup timer.'));
     const ok5 = runScript(R.bash, ['scripts/deploy.sh', v.profile, v.name], {
       cwd: R.fleetRoot,
-      env: deployEnv(v, R.pubkey, tunnelToken),
-      BACKUP_ACCOUNT: backupAcct,
+      env: { ...deployEnv(v, R.pubkey, tunnelToken), BACKUP_ACCOUNT: backupAcct },
     });
     if (!ok5) {
       // Ghost-card guard: register ran before deploy (in-process token handoff), so a
