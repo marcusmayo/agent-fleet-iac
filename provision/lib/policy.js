@@ -7,6 +7,7 @@ const { stripJsonc } = require('./jsonc');
 // Built-in defaults so the gate is safe even if the policy file is missing.
 const DEFAULTS = {
   maxFleet: 6,
+  a2aPairs: [],
   protectedAgents: [],
   maxBatch: 2,
   allowedRegions: ['eastus2'],
@@ -89,6 +90,12 @@ const SETTABLE = {
   defaultRegion:  { file: 'defaultRegion',       kind: 'str', re: /^[a-z0-9]{3,30}$/ },
   budgetName:     { file: 'budgetName',          kind: 'str', re: /^[A-Za-z0-9_-]{1,63}$/ },
   protectedAgents:{ file: 'protectedAgents',     kind: 'list', itemRe: /^[a-z][a-z0-9-]{1,23}$/, itemDesc: 'agent names', allowEmpty: true },   // `none` clears
+  // Agent-to-agent relay allowlist. Each item is a DIRECTED pair "from>to": permitting
+  // bosun>heimdall does NOT permit the reverse, because the two directions are different
+  // grants. Empty (the default) means no relay is possible at all -- the capability is
+  // off until an operator attests a specific pair, rather than on with a way to switch
+  // it off. `none` clears.
+  a2aPairs:       { file: 'a2aPairs',            kind: 'list', itemRe: /^[a-z][a-z0-9-]{1,23}>[a-z][a-z0-9-]{1,23}$/, itemDesc: 'directed pairs like bosun>heimdall', allowEmpty: true },
 };
 
 // Parse + shape-validate; throws with the ledgerable reason on bad input.
