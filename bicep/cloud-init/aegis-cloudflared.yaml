@@ -55,6 +55,14 @@ runcmd:
   - git config --system --add safe.directory /home/__ADMIN_USER__/agent-fleet-iac
   - 'cd /home/__ADMIN_USER__/aegis && npm install --omit=dev --no-audit --no-fund 2>&1 | tail -5 | tee -a /var/log/aegis-provision.log'
   - printf 'KEY_VAULT_NAME=%s\nMSI_CLIENT_ID=%s\nFLEET_IAC_ROOT=%s\n' '__KEY_VAULT_NAME__' '__MSI_CLIENT_ID__' '/home/__ADMIN_USER__/agent-fleet-iac' > /home/__ADMIN_USER__/aegis/.provision-flags
+  # An EMPTY registry, so the service can exist before its first agent is enrolled.
+  # aegis.js exits on a missing aegis.config.json -- right for an operator at a terminal,
+  # a crash loop under systemd (found on the first live boot: 150 s of ExecStartPre per
+  # attempt, restart counter climbing, nothing wrong with the unit). Enrolment is a later
+  # attested step. Nothing per-host lives here: the account id and token come from the
+  # vault via cf.env, so this file holds no truth a rebuild would need to recover.
+  - 'test -f /home/__ADMIN_USER__/aegis/aegis.config.json || printf "{\n  \"cfVaultName\": \"__KEY_VAULT_NAME__\",\n  \"agents\": []\n}\n" > /home/__ADMIN_USER__/aegis/aegis.config.json'
+  - chmod 0600 /home/__ADMIN_USER__/aegis/aegis.config.json
   # --- Boot-time secret fetch: managed identity -> fleet Key Vault, never on disk ---
   # Retries absorb RBAC propagation lag; the grant is a POST-APPLY attested step, so on
   # a first boot this legitimately fails until that step runs. It exits 0 either way and
