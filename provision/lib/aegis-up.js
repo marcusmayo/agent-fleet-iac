@@ -19,9 +19,9 @@
 // that script: seeing the two steps is worth more than hiding one.
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
-const { c: col, which, findFleetRoot } = require('./util');
+const { c: col, which, findFleetRoot, runCapture } = require('./util');
 const { loadAegisContract } = require('./aegis-contract');
+const pf = require('./preflight');
 
 // findFleetRoot locates the repo by its agent-lane markers; assert the control-plane
 // template is present too, so a partial checkout fails here rather than at az.
@@ -78,12 +78,19 @@ function printPlan(v, R) {
   console.log('    maxFleet       ' + col.dim('n/a — bounds agents; the control plane is not one'));
   console.log('    allowedRegions ' + col.dim('exempt — see aegis-up.js header (B-series unavailable in the agents\' region)'));
   console.log(col.bold('\n  steps when you run --go'));
-  console.log('    1. ' + col.dim('you run:') + ' scripts/cloudflare-provision.ps1  ' + col.dim('(tunnel + token, DNS, Access app)'));
+  console.log('    1. ' + col.dim('you run:') + ' scripts/cloudflare-provision.ps1 -ControlPlane  ' + col.dim('(tunnel + token, DNS, Access app)'));
   console.log('    2. az deployment sub create -> ' + v.resourceGroup + ' + ' + v.vmName + col.red('   — BILLABLE'));
   console.log('    3. ' + col.dim('then:') + ' attested grants (Key Vault read, subscription Contributor)');
   console.log(col.bold('\n  NOT granted by the deployment'));
   console.log('    ' + col.dim('The identity is created empty. Until the grant step runs, the service starts but'));
   console.log('    ' + col.dim('cannot read Cloudflare credentials and fleetctl cannot provision anything.'));
+  console.log(col.bold('\n  inputs'));
+  console.log('    tunnel token   ' + (R.tunnelToken
+    ? col.green('present') + col.dim('  ($CF_TUNNEL_TOKEN)')
+    : col.red('MISSING') + col.dim('  — run scripts/cloudflare-provision.ps1 -ControlPlane -AgentName ' + v.name + ' first')));
+  console.log('    ssh public key ' + (R.pubkey
+    ? col.green('resolved') + col.dim('  (' + R.pubkeyFrom + ')')
+    : col.red('MISSING') + col.dim('  — ' + R.pubkeyFrom)));
 }
 
 async function runAegisUp(file, opts = {}) {
@@ -96,12 +103,19 @@ async function runAegisUp(file, opts = {}) {
   }
   const v = res.value;
   const root = fleetRoot();
+  // SSH key: the SAME resolver as the agent lane -- $SSH_PUBKEY, else ~/.ssh/keel_t2.pub
+  // (override with $AF_SSH_PUBKEY_FILE) -- so the operator sets nothing new for this lane.
+  // A raw env value that is a <placeholder> is kept as-is so the preflight below refuses it
+  // loudly, rather than quietly falling through to the file.
+  const rawPub = (process.env.SSH_PUBKEY || '').trim();
+  const sk = pf.sshPubkey();
   const R = {
     root,
     az: which('az'),
-    budget: root ? budgetGate(root) : { ok: false, detail: 'fleet root not found', cap: null, spend: null },
+    budget: root ? budgetGate(root) : { ok: false, detail: 'fleet root not found', cap: null, spent: null, unit: '' },
     tunnelToken: (process.env.CF_TUNNEL_TOKEN || '').trim(),
-    pubkey: (process.env.SSH_PUBKEY || '').trim(),
+    pubkey: (rawPub && /[<>]/.test(rawPub)) ? rawPub : (sk.pubkey || ''),
+    pubkeyFrom: sk.result.detail,
   };
   printPlan(v, R);
 
@@ -165,10 +179,15 @@ async function runAegisUp(file, opts = {}) {
     '--output', 'json',
   ];
   console.log(col.cyan('\ndeploying — this takes several minutes...'));
-  const r = spawnSync(R.az, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
-  if (r.status !== 0) {
+  // runCapture, not a bare spawnSync: on Windows `az` is a .cmd shim that Node >= 20.12
+  // refuses to spawn without a shell (EINVAL -> "deployment FAILED: no output"). runCapture
+  // shells out only for that shim and passes ONE pre-quoted command string, quoting the
+  // one arg here that carries spaces (the SSH public key). It is the same helper the budget
+  // gate and cfcred already run live on the workstation.
+  const r = runCapture('az', args, { maxBuffer: 32 * 1024 * 1024 });
+  if (!r.ok) {
     console.log(col.red('\ndeployment FAILED:'));
-    console.log(((r.stderr || r.stdout || 'no output').split('\n').filter(Boolean).slice(0, 6).join('\n')));
+    console.log(((r.stderr || r.stdout || (r.error && r.error.message) || 'no output').split('\n').filter(Boolean).slice(0, 6).join('\n')));
     return 1;
   }
   let out = {};

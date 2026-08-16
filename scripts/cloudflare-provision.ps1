@@ -1,10 +1,17 @@
 <#
-cloudflare-provision.ps1 - one-command Cloudflare front door for a fleet agent.
-Creates/reuses: named tunnel (+token), ingress to the webchat, DNS CNAME, Access app
+cloudflare-provision.ps1 - one-command Cloudflare front door for a fleet agent, or for
+the control plane (-ControlPlane).
+Creates/reuses: named tunnel (+token), ingress to the app, DNS CNAME, Access app
 pinned to One-time PIN (email-code login, no account picker), operator-email policy.
 App Launcher stays off (avoids the clientless-isolation save error).
 Auth: set $env:CF_API_TOKEN (Zero Trust + DNS edit). Idempotent - safe to re-run.
-The printed tunnel token is what deploy.sh consumes as CF_TUNNEL_TOKEN.
+The tunnel token is what deploy.sh (agent) or fleetctl aegis up (control plane)
+consumes as CF_TUNNEL_TOKEN. -ControlPlane changes only what is control-plane-shaped:
+the default port becomes 7070 (aegis.js), the ingress dials 127.0.0.1 exactly as the
+loopback-pinned service binds, and the closing hint names the aegis lane. Everything
+else (tunnel, DNS, Access app, operator policy) is the same mechanism.
+When -TokenOutFile is given the token is NOT echoed to the console: the caller asked
+for it on disk, and a token on screen ends up in screenshots and scrollback.
 #>
 [CmdletBinding()]
 param(
@@ -16,11 +23,18 @@ param(
   [int]    $WebchatPort = 8443,
   [string] $SessionDuration = "24h",
   [string] $TokenOutFile = "",
-  [switch] $EnableSsh
+  [switch] $EnableSsh,
+  [switch] $ControlPlane   # front door for aegis.js (control plane), not an agent webchat
 )
 
 $ErrorActionPreference = "Stop"
 if (-not $env:CF_API_TOKEN) { throw "Set `$env:CF_API_TOKEN (Zero Trust + DNS edit scope) before running." }
+
+# Control plane: aegis.js listens on 7070 and is pinned to loopback (AEGIS_BIND=127.0.0.1),
+# so the ingress dials 127.0.0.1 -- not 'localhost', which may resolve to ::1 first.
+if ($ControlPlane -and -not $PSBoundParameters.ContainsKey('WebchatPort')) { $WebchatPort = 7070 }
+$kind    = if ($ControlPlane) { "control plane" } else { "agent" }
+$svcHost = if ($ControlPlane) { "127.0.0.1" } else { "localhost" }
 
 $api  = "https://api.cloudflare.com/client/v4"
 $hdrs = @{ Authorization = "Bearer $($env:CF_API_TOKEN)"; "Content-Type" = "application/json" }
@@ -47,7 +61,7 @@ function Invoke-CF {
   return $resp
 }
 
-Write-Host ">> Provisioning Cloudflare front door for '$AgentName' at https://$fqdn" -ForegroundColor Cyan
+Write-Host ">> Provisioning Cloudflare front door for $kind '$AgentName' at https://$fqdn" -ForegroundColor Cyan
 
 try { Invoke-CF GET "/accounts/$AccountId" | Out-Null } catch { Write-Host "   (account-read denied - continuing)" -ForegroundColor Yellow }
 
@@ -75,11 +89,11 @@ if ($existing) {
 }
 $token = (Invoke-CF GET "/accounts/$AccountId/cfd_tunnel/$tunnelId/token").result
 
-$ingress = @( @{ hostname = $fqdn; service = "http://localhost:$WebchatPort" } )
+$ingress = @( @{ hostname = $fqdn; service = "http://${svcHost}:$WebchatPort" } )
 if ($EnableSsh) { $ingress += @{ hostname = $sshHost; service = "ssh://localhost:22" } }
 $ingress += @{ service = "http_status:404" }
 Invoke-CF PUT "/accounts/$AccountId/cfd_tunnel/$tunnelId/configurations" @{ config = @{ ingress = $ingress } } | Out-Null
-Write-Host "   ingress set: $fqdn -> http://localhost:$WebchatPort"
+Write-Host "   ingress set: $fqdn -> http://${svcHost}:$WebchatPort"
 if ($EnableSsh) { Write-Host "   ingress set: $sshHost -> ssh://localhost:22" }
 
 function Ensure-Cname {
@@ -144,12 +158,22 @@ if ($TokenOutFile) {
 }
 
 Write-Host ""
-Write-Host "Cloudflare front door ready for $AgentName." -ForegroundColor Green
+Write-Host "Cloudflare front door ready for $kind $AgentName." -ForegroundColor Green
 Write-Host "Next (do NOT paste the token anywhere public):" -ForegroundColor Green
-Write-Host "    `$env:CF_TUNNEL_TOKEN = `"$token`""
-Write-Host "    bash scripts/deploy.sh $AgentProfile $AgentName"
-Write-Host ""
-Write-Host "After deploy + bootstrap, reach it at:  https://$fqdn" -ForegroundColor Green
+if ($TokenOutFile) {
+  Write-Host "    `$env:CF_TUNNEL_TOKEN = (Get-Content -Raw '$TokenOutFile').Trim(); Remove-Item '$TokenOutFile'"
+} else {
+  Write-Host "    `$env:CF_TUNNEL_TOKEN = `"$token`""
+}
+if ($ControlPlane) {
+  Write-Host "    node provision\bin\fleetctl.js aegis up agents\$AgentName.contract.jsonc --go --attest `"I approve provisioning the control plane $AgentName`""
+  Write-Host ""
+  Write-Host "After deploy + the attested grants, reach it at:  https://$fqdn" -ForegroundColor Green
+} else {
+  Write-Host "    bash scripts/deploy.sh $AgentProfile $AgentName"
+  Write-Host ""
+  Write-Host "After deploy + bootstrap, reach it at:  https://$fqdn" -ForegroundColor Green
+}
 if ($EnableSsh) {
   Write-Host "SSH over the tunnel (no public IP):     ./scripts/ssh-tunnel.ps1 -AgentName $AgentName" -ForegroundColor Green
 }
