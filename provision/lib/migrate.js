@@ -142,12 +142,15 @@ function tarList(f) {
   const r = runCapture('tar', ['-tzf', f], { maxBuffer: 64 * 1024 * 1024 });
   return r.ok ? (r.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean) : null;
 }
+// The agent chain (gate/audit.js) is { ..., prev_hash, hash } per line -- no sequence field;
+// its position IS its sequence. Head = entry count + last hash (+ prev_hash and ts when present).
 function chainHead(f, fromProfile) {
   const r = runCapture('tar', ['-xzOf', f, VOLROOT + fromProfile + '_' + fromProfile + '-logs/_data/audit.jsonl'], { maxBuffer: 64 * 1024 * 1024 });
   if (!r.ok) return null;
-  const last = (r.stdout || '').trim().split('\n').filter(Boolean).pop();
+  const lines = (r.stdout || '').trim().split('\n').filter(Boolean);
+  const last = lines[lines.length - 1];
   if (!last) return null;
-  try { const j = JSON.parse(last); return { seq: j.seq === undefined ? null : j.seq, hash: j.hash || null }; } catch { return null; }
+  try { const j = JSON.parse(last); return { entries: lines.length, hash: j.hash || null, prev_hash: j.prev_hash || null, ts: j.ts || j.timestamp || null }; } catch { return null; }
 }
 
 // ---- lane ------------------------------------------------------------------------------
@@ -223,7 +226,7 @@ async function runMigrate(from, to, opts = {}) {
   const pats = memberPatterns(fp, R.scope.scope);
   const wanted = members.filter((n) => pats.some((p) => globLike(p, n)));
   const head = chainHead(tmp, fp);
-  console.log('  ' + members.length + ' members, ' + wanted.length + ' in scope, sha256 ' + sha.slice(0, 16) + '…' + (head ? ', source chain head seq ' + head.seq + ' ' + String(head.hash || '').slice(0, 12) + '…' : ', source chain head unread'));
+  console.log('  ' + members.length + ' members, ' + wanted.length + ' in scope, sha256 ' + sha.slice(0, 16) + '…' + (head ? ', source chain head #' + head.entries + ' ' + String(head.hash || '').slice(0, 12) + '…' : ', source chain head unread'));
   if (!wanted.length) { fs.unlinkSync(tmp); led({ phrase: opts.attest, sourceBlob: srcBlob, sha256: sha, outcome: 'refused: snapshot has no members in scope' }); console.log(col.red('  nothing in scope inside the snapshot (ledgered)')); return 2; }
 
   // 3. upload into the target's container
@@ -252,7 +255,7 @@ async function runMigrate(from, to, opts = {}) {
   console.log(col.cyan('[5/5] ledger'));
   const rec = led({ phrase: opts.attest, sourceBlob: srcBlob, migrateBlob: migBlob, sha256: sha, membersTotal: members.length, membersInScope: wanted.length, membersExtracted: extracted ? Number(extracted) : null, sourceChainHead: head, restarted, integrity, outcome: fetched && fetched !== sha ? 'ok (INTEGRITY MISMATCH — investigate)' : 'ok' });
   console.log(col.green('\nmigrated ' + from + ' -> ' + to + ': ' + R.scope.scope.join(', ') + ' — ' + (extracted || '?') + ' members, ' + integrity) + col.dim('  (ledgered ' + (rec ? 'ok' : 'NO') + ')'));
-  if (head) console.log(col.dim('  cross-anchor: ' + from + ' chain head seq ' + head.seq + ' hash ' + head.hash + ' recorded with this migration; the chain itself stayed with ' + from));
+  if (head) console.log(col.dim('  cross-anchor: ' + from + ' chain head #' + head.entries + ' hash ' + head.hash + ' recorded with this migration; the chain itself stayed with ' + from));
   return 0;
 }
 
