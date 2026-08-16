@@ -161,6 +161,9 @@ runcmd:
   # needs (git pulls are its own files), narrow enough to be a Can't -- no shell, no other unit.
   - printf '__ADMIN_USER__ ALL=(root) NOPASSWD: /usr/bin/systemctl restart aegis\n' > /etc/sudoers.d/aegis-restart
   - chmod 0440 /etc/sudoers.d/aegis-restart && visudo -cf /etc/sudoers.d/aegis-restart
+  # fleetctl as a command on the hosted plane too: the lanes' own hints say "fleetctl <verb>",
+  # and an operator reading them over SSH or in a run-command should be able to run them verbatim.
+  - 'ln -sf /home/__ADMIN_USER__/agent-fleet-iac/provision/bin/fleetctl /usr/local/bin/fleetctl && chmod 0755 /home/__ADMIN_USER__/agent-fleet-iac/provision/bin/fleetctl'
   - systemctl daemon-reload
   - systemctl enable --now aegis || true
   - 'sleep 5; systemctl is-active aegis | tee -a /var/log/aegis-provision.log'

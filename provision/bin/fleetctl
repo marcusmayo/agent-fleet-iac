@@ -1,0 +1,13 @@
+#!/bin/sh
+# fleetctl - POSIX shim (hosted plane, WSL, macOS) so the CLI is a command, not a path: every
+# lane's hint ("fleetctl set-secrets <agent>") is then literally runnable. Resolves symlinks
+# before locating fleetctl.js, so `ln -s .../provision/bin/fleetctl /usr/local/bin/fleetctl`
+# works; exec keeps the exit code, which the lanes and the panel rely on.
+p=$0
+while [ -L "$p" ]; do
+  d=$(CDPATH= cd -- "$(dirname -- "$p")" && pwd -P)
+  l=$(readlink -- "$p")
+  case $l in /*) p=$l ;; *) p=$d/$l ;; esac
+done
+d=$(CDPATH= cd -- "$(dirname -- "$p")" && pwd -P)
+exec node "$d/fleetctl.js" "$@"
