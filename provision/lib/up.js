@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { c, findFleetRoot, which, resolveBash, runCapture } = require('./util');
+const { c, findFleetRoot, which, resolveBash, runCapture, deployerObjectId } = require('./util');
 const { loadContract } = require('./contract');
 const { derive } = require('./derive');
 const pf = require('./preflight');
@@ -119,6 +119,12 @@ function deployEnv(v, pubkey, tunnelToken) {
     SSH_CIDR: v.sshCidr || '',
     AZ_LOCATION: v.region,
     VM_SIZE: derive(v).azure.vmSize,   // contract, else $VM_SIZE, else the template default -- what plan + capacity checked
+    // The deployer's object id: the template grants it Key Vault Secrets Officer on the agent's
+    // vault so the seed step can write. deploy.sh derives it too, but under a different shell
+    // whose az may not answer; resolved HERE (env, else the az session) so the CLI path grants
+    // exactly what the panel path does. Empty would silently skip the grant and the seed would
+    // then fail with Forbidden -- seen live on the first region-move re-provision.
+    DEPLOYER_OBJECT_ID: deployerObjectId() || '',
     REPO_URL: v.repoUrl,          // always the resolved value — never ''
     REPO_REF: v.repoRef || '',    // '' equals the bicepparam default (HEAD)
   };

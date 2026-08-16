@@ -34,6 +34,15 @@ const PROFILE_SECRETS = {
   castor: (anth, ork) => [['model-api-key', ork], ['vision-api-key', anth], ['anthropic-api-key', anth]],
 };
 
+// A Forbidden from the vault's data plane is one of two things: the deployer's Secrets Officer
+// grant was skipped (empty DEPLOYER_OBJECT_ID at deploy) or has not propagated yet. Say which
+// fix to try, with the exact commands, instead of a bare error.
+function forbiddenHint(vault, rg) {
+  return c.yellow('  Forbidden on the vault data plane: either the deploy did not grant you Key Vault Secrets Officer (empty DEPLOYER_OBJECT_ID) or the grant is still propagating (up to ~10 min).') + '\n' +
+    c.dim('  check:  az role assignment list --assignee <your object id> --scope <vault id> -o table   (vault id: az keyvault show -n ' + vault + ' -g ' + rg + ' --query id -o tsv)') + '\n' +
+    c.dim('  grant:  az role assignment create --assignee-object-id <your object id> --assignee-principal-type User --role "Key Vault Secrets Officer" --scope <vault id>') + '\n' +
+    c.dim('  then wait a minute and re-run set-secrets ' + '(nothing partial was written past the failing name).');
+}
 function runSetSecrets(agent) {
   console.log(c.cyan(`set-secrets  ${agent}`));
 
@@ -70,7 +79,11 @@ function runSetSecrets(agent) {
 
   for (const [name, value] of writes) {
     const r = setSecret(v.vault, name, value);
-    if (!r.ok) { console.log(c.red(`\nset-secrets FAILED writing '${name}': ${r.reason}`)); return 1; }
+    if (!r.ok) {
+      console.log(c.red(`\nset-secrets FAILED writing '${name}': ${r.reason}`));
+      if (/Forbidden|not authorized|AuthorizationFailed/i.test(String(r.reason || ''))) console.log(forbiddenHint(v.vault, v.rg));
+      return 1;
+    }
     console.log(c.green(`  set ${name}`));
   }
 
