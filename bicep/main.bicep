@@ -5,7 +5,7 @@
 // Decommission = delete the resource group (see scripts/decommission.sh).
 targetScope = 'subscription'
 
-@description('Short agent name, e.g. heimdall, cerberus, helm. Becomes the RG + VM name.')
+@description('Short agent name (lowercase, hyphenated). Becomes the RG + VM name.')
 @minLength(2)
 @maxLength(24)
 param agentName string

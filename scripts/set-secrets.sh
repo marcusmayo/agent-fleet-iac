@@ -6,12 +6,12 @@
 # depth). Chat #18 root cause: a raw "az keyvault secret set --value <placeholder>"
 # stored the literal placeholder, which reached OpenRouter as no auth header (401).
 #
-# Usage:  scripts/set-secrets.sh <resourceGroup>        # e.g. rg-heimdall
+# Usage:  scripts/set-secrets.sh <resourceGroup>        # e.g. rg-<agent>
 # Prompts (no echo) for each key, validates the prefix, then sets it. Values are
 # never echoed, never passed as args, and never written to shell history.
 set -euo pipefail
 
-RG="${1:?usage: set-secrets.sh <resourceGroup>  (e.g. rg-heimdall)}"
+RG="${1:?usage: set-secrets.sh <resourceGroup>  (e.g. rg-<agent>)}"
 command -v az >/dev/null || { echo "ABORT: az CLI not found"; exit 1; }
 
 KV="$(az keyvault list -g "$RG" --query '[0].name' -o tsv 2>/dev/null || true)"

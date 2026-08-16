@@ -40,7 +40,7 @@ var suffix = substring(uniqueString(subscription().id, agentName), 0, 5)
 var kvName = '${agentName}-kv-${suffix}'
 // Storage-account names: 3-24 chars, lowercase letters + digits ONLY (no hyphens).
 // Strip hyphens and cap the base at 17 so base + 'sa'(2) + suffix(5) <= 24.
-// No-op for hyphen-free names — heimdall's live SA re-derives identically.
+// No-op for hyphen-free names — an existing hyphen-free agent's SA re-derives identically.
 var saName = toLower('${take(replace(agentName, '-', ''), 17)}sa${suffix}')
 var uaiName = '${agentName}-identity'
 // Built-in role definition GUIDs (stable across clouds).
