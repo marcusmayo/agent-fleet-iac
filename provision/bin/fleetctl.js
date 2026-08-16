@@ -24,6 +24,7 @@ Usage:
   fleetctl backup   init | list <agent> | snapshot <agent>
   fleetctl aegis    plan <contract> | up <contract> --go --attest "<sentence>"
   fleetctl aegis    grant <contract> vault|contributor [--go --attest "<sentence>"]
+  fleetctl enroll   <agent> [--go --attest "<sentence>"] [--domain=<d>] [--plane=<label>] [--aegis-config <path>]
   fleetctl restore  <agent> [--blob <name>]
   fleetctl --help
 
@@ -84,6 +85,12 @@ Commands:
             snapshot  force a push now (az vm run-command; VM must be running).
             Decommission --go banks a final snapshot as surface 0 automatically.
 
+  enroll    Adopt an already-provisioned agent into THIS control plane with its OWN
+            service token (<plane>-<agent>; plane = $AEGIS_PLANE, else hostname), so an
+            agent's audit chain can tell one control plane from another. Identity comes
+            from the agent RG's tags, the token from Cloudflare, the secret goes straight
+            into the (gitignored) registry and is never printed. Attested per agent,
+            ledgered, idempotent (see provision/lib/enroll.js).
   aegis     Provision the CONTROL PLANE (not an agent). Its own contract and lane, so
             fleet caps and decommission cannot reach it. Budget gate applies; maxFleet
             and allowedRegions do not (see provision/lib/aegis-up.js). 'grant' gives its
@@ -136,6 +143,12 @@ async function main(argv) {
   if (cmd === 'plan') {
     if (!file) { console.error(c.red('plan: missing <contract.agent.jsonc>')); return 2; }
     return runPlan(file, { requireWhatif: flags.has('--require-whatif') });
+  }
+  if (cmd === 'enroll') {
+    if (!file) { console.error(c.red('enroll: missing <agent>')); return 2; }
+    const { runEnroll } = require('../lib/enroll');
+    const ai = args.indexOf('--attest');
+    return runEnroll(file, { go: flags.has('--go'), attest: ai > -1 ? args[ai + 1] : '', aegisConfig, domain: opts.domain, plane: opts.plane });
   }
   if (cmd === 'register') {
     if (!file) { console.error(c.red('register: missing <contract.agent.jsonc>')); return 2; }
