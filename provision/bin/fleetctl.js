@@ -23,7 +23,8 @@ Usage:
   fleetctl set-secrets <agent>
   fleetctl backup   init | list <agent> | snapshot <agent>
   fleetctl aegis    plan <contract> | up <contract> --go --attest "<sentence>"
-  fleetctl aegis    grant <contract> vault|contributor [--go --attest "<sentence>"]
+  fleetctl aegis    grant <contract> vault|contributor|backups [--go --attest "<sentence>"]
+  fleetctl aegis    update <contract> [--go --attest "<sentence>"]
   fleetctl enroll   <agent> [--go --attest "<sentence>"] [--domain=<d>] [--plane=<label>] [--aegis-config <path>]
   fleetctl migrate  <from> <to> [--scope=knowledge,claude,...] [--blob=<snapshot>] [--overwrite] [--go --attest "<sentence>"]
   fleetctl restore  <agent> [--blob <name>]
@@ -105,7 +106,9 @@ Commands:
             and allowedRegions do not (see provision/lib/aegis-up.js). 'grant' gives its
             identity the two rights the template deliberately withholds -- Key Vault read
             and subscription Contributor -- each an attested, ledgered act, no other role
-            expressible (see provision/lib/aegis-grant.js).
+            expressible (see provision/lib/aegis-grant.js). 'update' moves the hosted plane's
+            two checkouts to their pushed heads (fast-forward only) and restarts the unit --
+            attested and ledgered with before/after commits (provision/lib/aegis-update.js).
   restore   Pull a backup onto a (re)provisioned agent and restart its containers
             (az vm run-command; VM must be running). Default = newest blob.
 
@@ -203,9 +206,15 @@ async function main(argv) {
       const { runAegisGrant } = require('../lib/aegis-grant');
       return runAegisGrant(contractFile, args[3], { go: flags.has('--go'), attest: ai > -1 ? args[ai + 1] : '' });
     }
+    // Self-update of the hosted plane: pull both checkouts ff-only, restart, ledger before/after.
+    if (sub === 'update' && contractFile) {
+      const { runAegisUpdate } = require('../lib/aegis-update');
+      return runAegisUpdate(contractFile, { go: flags.has('--go'), attest: ai > -1 ? args[ai + 1] : '' });
+    }
     console.error(c.red('aegis: usage — fleetctl aegis plan <aegis.contract.jsonc>'));
     console.error(c.red('              fleetctl aegis up    <aegis.contract.jsonc> [--go --attest "<sentence>"]'));
-    console.error(c.red('              fleetctl aegis grant <aegis.contract.jsonc> vault|contributor [--go --attest "<sentence>"]'));
+    console.error(c.red('              fleetctl aegis grant <aegis.contract.jsonc> vault|contributor|backups [--go --attest "<sentence>"]'));
+    console.error(c.red('              fleetctl aegis update <aegis.contract.jsonc> [--go --attest "<sentence>"]'));
     return 2;
   }
   if (cmd === 'restore') {
