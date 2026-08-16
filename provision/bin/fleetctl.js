@@ -25,7 +25,7 @@ Usage:
   fleetctl aegis    plan <contract> | up <contract> --go --attest "<sentence>"
   fleetctl aegis    grant <contract> vault|contributor [--go --attest "<sentence>"]
   fleetctl enroll   <agent> [--go --attest "<sentence>"] [--domain=<d>] [--plane=<label>] [--aegis-config <path>]
-  fleetctl migrate  <from> <to> [--scope=knowledge,claude,...] [--blob=<snapshot>] [--go --attest "<sentence>"]
+  fleetctl migrate  <from> <to> [--scope=knowledge,claude,...] [--blob=<snapshot>] [--overwrite] [--go --attest "<sentence>"]
   fleetctl restore  <agent> [--blob <name>]
   fleetctl --help
 
@@ -90,8 +90,10 @@ Commands:
             fresh snapshot of <from>, copied unchanged into <to>'s backup container, and
             <to> extracts ONLY the scoped volumes with the profile prefix translated, using
             its own identity. Same profile: everything but logs. Cross profile: knowledge by
-            default, claude opt-in, state and logs never. Ledgered with the source chain's
-            head hash (cross-anchor); chains themselves never move (provision/lib/migrate.js).
+            default, claude opt-in, state and logs never. Add-only by default: files the target
+            already has are kept and reported; --overwrite replaces them under a different
+            attestation sentence. Ledgered with the source chain's head hash (cross-anchor);
+            chains themselves never move (provision/lib/migrate.js).
   enroll    Adopt an already-provisioned agent into THIS control plane with its OWN
             service token (<plane>-<agent>; plane = $AEGIS_PLANE, else hostname), so an
             agent's audit chain can tell one control plane from another. Identity comes
@@ -156,7 +158,7 @@ async function main(argv) {
     if (!file || !to) { console.error(c.red('migrate: usage — fleetctl migrate <from> <to> [--scope=a,b] [--blob=<name>] [--go --attest "..."]')); return 2; }
     const { runMigrate } = require('../lib/migrate');
     const ai = args.indexOf('--attest');
-    return runMigrate(file, to, { go: flags.has('--go'), attest: ai > -1 ? args[ai + 1] : '', scope: opts.scope, blob: opts.blob });
+    return runMigrate(file, to, { go: flags.has('--go'), attest: ai > -1 ? args[ai + 1] : '', scope: opts.scope, blob: opts.blob, overwrite: flags.has('--overwrite') });
   }
   if (cmd === 'enroll') {
     if (!file) { console.error(c.red('enroll: missing <agent>')); return 2; }

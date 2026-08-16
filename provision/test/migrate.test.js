@@ -56,8 +56,15 @@ test('target script: own-identity fetch, volume assertions incl. state for claud
   assert.match(s, /grep -- '-webchat\$'/);
   assert.match(s, /echo "migrated: \$BLOB"/);
 });
-test('attestation sentence names both agents', () => {
+test('attestation sentence names both agents; overwrite is a different sentence', () => {
   assert.strictEqual(attestSentence('bosun', 'heimdall'), 'I approve migrating bosun to heimdall');
+  assert.strictEqual(attestSentence('bosun', 'heimdall', true), 'I approve migrating bosun to heimdall overwriting existing files');
+});
+test('target script: add-only by default (skip existing + report), --overwrite only when asked', () => {
+  const base = { account: 'a', to: 'heimdall', blob: 'b.tar.gz', fromProfile: 'keel', toProfile: 'castor', scope: ['knowledge'] };
+  const dflt = targetScript(base), ow = targetScript({ ...base, overwrite: true });
+  assert.match(dflt, /--skip-old-files --warning=existing-file/); assert.ok(!/--overwrite/.test(dflt)); assert.match(dflt, /skipped-existing:/); assert.match(dflt, /echo "mode: add-only"/);
+  assert.match(ow, /--overwrite/); assert.ok(!/--skip-old-files/.test(ow)); assert.match(ow, /echo "mode: overwrite"/);
 });
 test('grant lane: three verbs now, still no Owner / User Access Administrator; backups sentence', () => {
   assert.deepStrictEqual(Object.keys(VERBS).sort(), ['backups', 'contributor', 'vault']);

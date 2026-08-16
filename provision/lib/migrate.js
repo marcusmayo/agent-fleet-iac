@@ -25,6 +25,11 @@
 //   cross profile  -> volumes BOTH sides have, minus logs and state; default knowledge;
 //                     claude (transcripts + state/chat-session*.json pointers) opt-in
 //   logs           -> never. A chain that moves is a chain that lies.
+// NON-CLOBBERING BY DEFAULT (structural). Two sources into one target is a union, and a
+// union must not silently destroy what the target already holds: existing target files are
+// KEPT (tar --skip-old-files) and each one is reported and ledgered. Replacing them is a
+// different act -- --overwrite -- with a different attestation sentence, so the phrase that
+// adds can never be the phrase that destroys.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -40,7 +45,7 @@ const CROSS_NEVER = new Set(['logs', 'state']);
 const CROSS_DEFAULT = ['knowledge'];
 const VOLROOT = 'var/lib/docker/volumes/';
 
-function attestSentence(from, to) { return 'I approve migrating ' + from + ' to ' + to; }
+function attestSentence(from, to, overwrite) { return 'I approve migrating ' + from + ' to ' + to + (overwrite ? ' overwriting existing files' : ''); }
 
 // Pure: <profile>_<profile>-<vol> -> vol suffix, for the given profile only.
 function volSuffixes(volumeNames, profile) {
@@ -82,23 +87,32 @@ function transformExpr(fromProfile, toProfile) {
 // Pure: the script the TARGET runs. Fetches with ITS identity from ITS container (the same
 // path agent-backup restore uses), asserts every target volume exists before touching
 // anything, extracts only the scoped members with the prefix translated, restarts webchat.
-function targetScript({ account, to, blob, fromProfile, toProfile, scope }) {
+function targetScript({ account, to, blob, fromProfile, toProfile, scope, overwrite }) {
   const vols = scope.map((v) => toProfile + '_' + toProfile + '-' + v);
   if (scope.includes('claude') && !scope.includes('state')) vols.push(toProfile + '_' + toProfile + '-state');
   const pats = memberPatterns(fromProfile, scope).map((p) => "'" + p + "'").join(' ');
+  // default: keep what the target has, say what was kept; --overwrite: replace, say so
+  const mode = overwrite ? '--overwrite' : '--skip-old-files --warning=existing-file';
   return [
     '#!/bin/bash',
     'set -euo pipefail',
+    'ROOT=/',
     'ACC=' + account + '; CT=' + to + '; BLOB=' + blob,
     'tok() { curl -fsS --get -H Metadata:true --data-urlencode "api-version=2018-02-01" --data-urlencode "resource=https://storage.azure.com/" "http://169.254.169.254/metadata/identity/oauth2/token" | grep -o \'"access_token":"[^"]*\' | cut -d\'"\' -f4; }',
     'T="$(tok)"; TMP="/tmp/$BLOB"',
     'curl -fsS -H "Authorization: Bearer $T" -H "x-ms-version: 2021-08-06" -o "$TMP" "https://$ACC.blob.core.windows.net/$CT/$BLOB"',
     'echo "fetched-sha256: $(sha256sum "$TMP" | cut -d\' \' -f1)"',
-    'for v in ' + [...new Set(vols)].join(' ') + '; do [ -d "/var/lib/docker/volumes/$v/_data" ] || { echo "ABORT: target volume $v missing"; rm -f "$TMP"; exit 1; }; done',
+    'for v in ' + [...new Set(vols)].join(' ') + '; do [ -d "$ROOT/var/lib/docker/volumes/$v/_data" ] || { echo "ABORT: target volume $v missing"; rm -f "$TMP"; exit 1; }; done',
     'N=$(tar -tzf "$TMP" --wildcards ' + pats + ' | wc -l)',
-    'tar -xzf "$TMP" -C / --wildcards --transform \'' + transformExpr(fromProfile, toProfile) + '\' ' + pats,
+    'ERR=$(mktemp)',
+    'tar -xzf "$TMP" -C "$ROOT" --wildcards ' + mode + ' --transform \'' + transformExpr(fromProfile, toProfile) + '\' ' + pats + ' 2>"$ERR" || { cat "$ERR"; rm -f "$TMP" "$ERR"; exit 1; }',
     'rm -f "$TMP"',
     'echo "extracted: $N members"',
+    // Report kept files (regular files only; the volume dirs themselves are always "existing").
+    'grep "skipping existing file" "$ERR" | sed "s/^tar: //; s/: skipping existing file$//" | while read -r f; do [ -f "$ROOT/$f" ] && echo "kept: $f"; done > "$ERR.kept" || true',
+    'echo "skipped-existing: $(wc -l < "$ERR.kept")"',
+    'head -n 20 "$ERR.kept"; rm -f "$ERR" "$ERR.kept"',
+    'echo "mode: ' + (overwrite ? 'overwrite' : 'add-only') + '"',
     'for ct in $(docker ps --format \'{{.Names}}\' | grep -- \'-webchat$\'); do docker restart "$ct" >/dev/null && echo "restarted: $ct"; done',
     'echo "migrated: $BLOB"',
   ].join('\n') + '\n';
@@ -159,6 +173,7 @@ async function runMigrate(from, to, opts = {}) {
   if (!from || !to || !NAME_RE.test(from) || !NAME_RE.test(to)) { console.log(col.red('\nmigrate: usage — fleetctl migrate <from> <to> [--scope=a,b] [--blob=<name>] [--go --attest "..."]')); return 2; }
   if (from === to) { console.log(col.red('\nmigrate: from and to are the same agent')); return 2; }
   const requested = opts.scope ? String(opts.scope).split(',').map((s) => s.trim()).filter(Boolean) : null;
+  const overwrite = !!opts.overwrite;
 
   // ---- gather ----
   const R = { az: which('az'), tar: which('tar'), account: bk.resolveAccount() };
@@ -171,7 +186,7 @@ async function runMigrate(from, to, opts = {}) {
   R.srcSuf = fp && R.srcVols ? volSuffixes(R.srcVols, fp) : [];
   R.tgtSuf = tp && R.tgtVols ? volSuffixes(R.tgtVols, tp) : [];
   R.scope = (fp && tp) ? resolveScope(fp, tp, R.srcSuf, R.tgtSuf, requested) : { ok: false, allowed: [], scope: [], why: 'profiles unknown' };
-  const required = attestSentence(from, to);
+  const required = attestSentence(from, to, overwrite);
 
   // ---- plan ----
   console.log(col.bold('\nMIGRATE — ' + from + '  ->  ' + to));
@@ -182,12 +197,13 @@ async function runMigrate(from, to, opts = {}) {
   console.log('  target volumes  ' + (R.tgtSuf.length ? R.tgtSuf.join(', ') : col.yellow('unread (target VM must be running)')));
   console.log('  scope           ' + (R.scope.ok ? col.green(R.scope.scope.join(', ')) + col.dim(R.scope.scope.includes('claude') ? '  (+ state/chat-session*.json pointers)' : '') : col.red(R.scope.why || 'unresolved')) + col.dim('   allowed: ' + (R.scope.allowed.length ? R.scope.allowed.join(', ') : 'none') + ' · logs never move'));
   console.log('  snapshot        ' + (opts.blob ? 'existing ' + opts.blob : 'FRESH (agent-backup push on ' + from + ' first)') + col.dim('  -> copied unchanged into ' + to + '\'s container as migrate-' + from + '-<stamp>.tar.gz'));
+  console.log('  mode            ' + (overwrite ? col.red('OVERWRITE — existing target files are replaced') : col.green('add only') + col.dim(' — existing target files are kept and each is reported; --overwrite is a different sentence')));
   console.log('  attestation     ' + col.dim(required));
   if (!opts.go) { console.log(col.yellow('\nplan only — nothing was moved. Re-run with --go --attest "' + required + '" to execute.')); return 0; }
 
   // ---- go ----
   const policyPath = resolvePolicyPath();
-  const base = { action: 'aegis.migrate', key: from + '>' + to, from, to, fromProfile: fp || null, toProfile: tp || null, scope: R.scope.scope };
+  const base = { action: 'aegis.migrate', key: from + '>' + to, from, to, fromProfile: fp || null, toProfile: tp || null, scope: R.scope.scope, mode: overwrite ? 'overwrite' : 'add-only' };
   const led = (extra) => { try { return policyPath ? ledger(policyPath, { ...base, ...extra }) : null; } catch { return null; } };
   if ((opts.attest || '').trim() !== required) {
     led({ phrase: opts.attest || '', outcome: 'refused: attestation mismatch' });
@@ -239,9 +255,11 @@ async function runMigrate(from, to, opts = {}) {
 
   // 4. target extracts the scope with the prefix translated
   console.log(col.cyan('[4/5] ' + to + ' fetches with its own identity and extracts the scope'));
-  const r = runOnVm(to, targetScript({ account: R.account, to, blob: migBlob, fromProfile: fp, toProfile: tp, scope: R.scope.scope }));
+  const r = runOnVm(to, targetScript({ account: R.account, to, blob: migBlob, fromProfile: fp, toProfile: tp, scope: R.scope.scope, overwrite }));
   const fetched = (r.msg.match(/fetched-sha256:\s*([0-9a-f]{64})/) || [])[1] || null;
   const extracted = (r.msg.match(/extracted:\s*(\d+) members/) || [])[1];
+  const skipped = (r.msg.match(/skipped-existing:\s*(\d+)/) || [])[1];
+  const kept = (r.msg.match(/kept:\s*(\S+)/g) || []).map((s) => s.replace(/kept:\s*/, ''));
   const done = /migrated:/.test(r.msg);
   const restarted = (r.msg.match(/restarted:\s*(\S+)/g) || []).map((s) => s.replace(/restarted:\s*/, ''));
   if (!r.ok || !done) {
@@ -253,8 +271,9 @@ async function runMigrate(from, to, opts = {}) {
 
   // 5. ledger
   console.log(col.cyan('[5/5] ledger'));
-  const rec = led({ phrase: opts.attest, sourceBlob: srcBlob, migrateBlob: migBlob, sha256: sha, membersTotal: members.length, membersInScope: wanted.length, membersExtracted: extracted ? Number(extracted) : null, sourceChainHead: head, restarted, integrity, outcome: fetched && fetched !== sha ? 'ok (INTEGRITY MISMATCH — investigate)' : 'ok' });
+  const rec = led({ phrase: opts.attest, sourceBlob: srcBlob, migrateBlob: migBlob, sha256: sha, membersTotal: members.length, membersInScope: wanted.length, membersExtracted: extracted ? Number(extracted) : null, skippedExisting: skipped ? Number(skipped) : (overwrite ? 0 : null), kept: kept.slice(0, 20), sourceChainHead: head, restarted, integrity, outcome: fetched && fetched !== sha ? 'ok (INTEGRITY MISMATCH — investigate)' : 'ok' });
   console.log(col.green('\nmigrated ' + from + ' -> ' + to + ': ' + R.scope.scope.join(', ') + ' — ' + (extracted || '?') + ' members, ' + integrity) + col.dim('  (ledgered ' + (rec ? 'ok' : 'NO') + ')'));
+  if (!overwrite) console.log('  kept on target (already present, not replaced): ' + (skipped || '0') + (kept.length ? '  — ' + kept.slice(0, 5).join(', ') + (kept.length > 5 ? ' …' : '') : ''));
   if (head) console.log(col.dim('  cross-anchor: ' + from + ' chain head #' + head.entries + ' hash ' + head.hash + ' recorded with this migration; the chain itself stayed with ' + from));
   return 0;
 }
