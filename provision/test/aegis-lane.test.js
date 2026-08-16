@@ -64,8 +64,8 @@ test('capacity treats an empty/absent limit as unreadable, never as zero-and-fin
   assert.match(r.detail, /unreadable/);
 });
 
-test('grant lane: exactly two verbs, neither can express Owner or User Access Administrator', () => {
-  assert.deepStrictEqual(Object.keys(VERBS).sort(), ['contributor', 'vault']);
+test('grant lane: exactly three verbs, none can express Owner or User Access Administrator', () => {
+  assert.deepStrictEqual(Object.keys(VERBS).sort(), ['backups', 'contributor', 'vault']);
   for (const v of Object.values(VERBS)) assert.ok(!/Owner|User Access Administrator/.test(v.role), v.role);
   assert.ok(Object.isFrozen(VERBS));
 });

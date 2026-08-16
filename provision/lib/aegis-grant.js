@@ -5,9 +5,13 @@
 // the fleet should acquire its rights through explicit, ledgered decisions rather than a
 // line buried in a template no one re-reads. This lane is those decisions.
 //
-// Two verbs, and structurally nothing else:
+// Three verbs, and structurally nothing else:
 //   vault        Key Vault Secrets User on the fleet vault  (reads cf-api-token / cf-account-id)
 //   contributor  Contributor at subscription scope         (fleetctl provisions/decommissions agents)
+//   backups      Storage Blob Data Contributor on the fleet backup ACCOUNT (fleetctl migrate:
+//                the plane reads a source snapshot and hands it into the target's container;
+//                agents keep reading only their own). Explicit and ledgered rather than
+//                exercised silently through Contributor's listKeys.
 // Owner and User Access Administrator are not verbs here, so this path cannot give the
 // identity the power to escalate itself. Contributor cannot assign roles.
 //
@@ -23,12 +27,13 @@ const { resolvePolicyPath, ledger } = require('./policy');
 const VERBS = Object.freeze({
   vault: { role: 'Key Vault Secrets User', label: 'Key Vault read (fleet vault)' },
   contributor: { role: 'Contributor', label: 'Contributor (subscription)' },
+  backups: { role: 'Storage Blob Data Contributor', label: 'fleet backup store read/write (migrate)' },
 });
 
 function attestSentence(name, what, v) {
-  return what === 'vault'
-    ? 'I approve granting the control plane ' + name + ' read on ' + v.fleetVaultName
-    : 'I approve granting the control plane ' + name + ' Contributor on the subscription';
+  if (what === 'vault') return 'I approve granting the control plane ' + name + ' read on ' + v.fleetVaultName;
+  if (what === 'backups') return 'I approve granting the control plane ' + name + ' read and write on the fleet backup store';
+  return 'I approve granting the control plane ' + name + ' Contributor on the subscription';
 }
 
 const az = (args) => runCapture('az', args);
@@ -46,6 +51,13 @@ function gather(v, what) {
     R.scope = tsv(az(['keyvault', 'show', '-n', v.fleetVaultName, '--query', 'id', '-o', 'tsv']));
     // RBAC vault -> role assignment. Access-policy vault -> set-policy. Read it, don't guess.
     R.vaultRbac = tsv(az(['keyvault', 'show', '-n', v.fleetVaultName, '--query', 'properties.enableRbacAuthorization', '-o', 'tsv'])).toLowerCase();
+  } else if (what === 'backups') {
+    // The fleet backup store: one account in rg-fleet-backups (see backup.js). Absent -> no scope -> refused.
+    const bk = require('./backup');
+    R.backupAccount = bk.resolveAccount();
+    R.scope = (R.backupAccount && R.subscriptionId)
+      ? '/subscriptions/' + R.subscriptionId + '/resourceGroups/' + bk.BACKUP_RG + '/providers/Microsoft.Storage/storageAccounts/' + R.backupAccount
+      : '';
   } else {
     R.scope = R.subscriptionId ? '/subscriptions/' + R.subscriptionId : '';
   }
@@ -73,13 +85,13 @@ function printPlan(v, R, required) {
   const ex = R.existing === null ? col.yellow('unreadable') : (R.existing.length ? col.green('already granted — --go would be a ledgered no-op') : 'not yet granted');
   console.log('  current state   ' + ex);
   console.log('  attestation     ' + col.dim(required));
-  console.log(col.bold('\n  NOT expressible here') + col.dim('  Owner, User Access Administrator, any other role — this lane has two verbs.'));
+  console.log(col.bold('\n  NOT expressible here') + col.dim('  Owner, User Access Administrator, any other role — this lane has three verbs.'));
 }
 
 async function runAegisGrant(file, what, opts = {}) {
   console.log(col.cyan('aegis grant ' + (what || '?') + (opts.go ? ' --go' : ' (plan)') + '  ' + file));
   if (!VERBS[what]) {
-    console.log(col.red("\naegis grant: what must be 'vault' or 'contributor' — this lane can grant nothing else"));
+    console.log(col.red("\naegis grant: what must be 'vault', 'contributor' or 'backups' — this lane can grant nothing else"));
     return 2;
   }
   const res = loadAegisContract(file);
@@ -111,7 +123,7 @@ async function runAegisGrant(file, what, opts = {}) {
   const missing = [];
   if (!R.az) missing.push('az');
   if (!R.principalId) missing.push(v.name + '-identity principal id (is the control plane deployed?)');
-  if (!R.scope) missing.push(what === 'vault' ? 'vault resource id (' + v.fleetVaultName + ')' : 'subscription id');
+  if (!R.scope) missing.push(what === 'vault' ? 'vault resource id (' + v.fleetVaultName + ')' : what === 'backups' ? 'fleet backup store (run fleetctl backup init first)' : 'subscription id');
   if (missing.length) {
     led({ phrase: opts.attest, outcome: 'refused: missing ' + missing.join(', ') });
     console.log(col.red('\naegis grant --go ABORT (nothing granted) — missing: ' + missing.join(', ')));
