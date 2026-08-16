@@ -63,7 +63,7 @@ var uaiName = '${aegisName}-identity'
 var wantPublicIp = !empty(sshAccessCidr)
 
 var ciRaw = loadTextContent('../cloud-init/aegis-cloudflared.yaml')
-var ciFinal = replace(replace(replace(replace(replace(replace(replace(
+var ciFinal = replace(replace(replace(replace(replace(replace(replace(replace(
   ciRaw,
   '__CF_TUNNEL_TOKEN__', cloudflareTunnelToken),
   '__ADMIN_USER__', adminUsername),
@@ -71,7 +71,8 @@ var ciFinal = replace(replace(replace(replace(replace(replace(replace(
   '__FLEET_REPO_URL__', fleetRepoUrl),
   '__REPO_REF__', repoRef),
   '__KEY_VAULT_NAME__', fleetVaultName),
-  '__MSI_CLIENT_ID__', uai.properties.clientId)
+  '__MSI_CLIENT_ID__', uai.properties.clientId),
+  '__MSI_PRINCIPAL_ID__', uai.properties.principalId)
 
 // Deny-all inbound, exactly as the agents. The tunnel is outbound-initiated, so the
 // control plane needs no inbound rule to be reachable -- and an operator who can reach

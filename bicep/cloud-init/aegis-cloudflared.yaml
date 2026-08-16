@@ -113,11 +113,24 @@ runcmd:
     Environment=AEGIS_PORT=7070
     Environment=FLEET_IAC_ROOT=/home/__ADMIN_USER__/agent-fleet-iac
     Environment=AZURE_CLIENT_ID=__MSI_CLIENT_ID__
+    # The control plane's own identity IS the deployer on this host: agent vaults grant
+    # Key Vault Secrets Officer to this object id so `fleetctl set-secrets` can seed them.
+    # (On the workstation cfcred derives this from `az ad signed-in-user`; a managed
+    # identity is not a signed-in user, so it is pinned here at provision time.)
+    Environment=DEPLOYER_OBJECT_ID=__MSI_PRINCIPAL_ID__
     # Refuse to start on anything but loopback. aegis.js has no auth of its own, so a
     # wider bind would publish an unauthenticated control plane; this makes the
     # invariant enforced rather than documented.
     ExecStartPre=/bin/sh -c '[ "$AEGIS_BIND" = 127.0.0.1 ] || { echo "REFUSING: AEGIS_BIND=$AEGIS_BIND -- the control plane may only bind loopback"; exit 1; }'
-    ExecStartPre=/usr/local/bin/aegis-fetch-secrets
+    # '+' = run this one command with full privileges: it writes /etc/aegis/cf.env, and
+    # /etc/aegis is root-owned 0700 (created by cloud-init). As the service user the write
+    # would fail silently and the service would start credential-less on every boot.
+    ExecStartPre=+/usr/local/bin/aegis-fetch-secrets
+    # az must be signed in AS THE MANAGED IDENTITY, in the service user's own ~/.azure,
+    # for the az calls fleetctl spawns (budget gate, deployments). Idempotent per start.
+    # --allow-no-subscriptions: before the Contributor grant the identity sees none, and
+    # that must not stop the service from coming up (the panel reports what is pending).
+    ExecStartPre=/bin/sh -c 'az login --identity --client-id __MSI_CLIENT_ID__ --allow-no-subscriptions >/dev/null 2>&1 || echo "aegis: az MSI login failed (grants pending?)"'
     ExecStart=/usr/bin/node aegis.js
     Restart=on-failure
     RestartSec=10
