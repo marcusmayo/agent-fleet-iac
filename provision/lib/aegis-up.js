@@ -22,6 +22,7 @@ const path = require('path');
 const { c: col, which, findFleetRoot, runCapture } = require('./util');
 const { loadAegisContract } = require('./aegis-contract');
 const pf = require('./preflight');
+const { checkCapacity } = require('./capacity');
 
 // findFleetRoot locates the repo by its agent-lane markers; assert the control-plane
 // template is present too, so a partial checkout fails here rather than at az.
@@ -77,6 +78,10 @@ function printPlan(v, R) {
   if (R.budget.detail) console.log(col.dim('                   ' + R.budget.detail));
   console.log('    maxFleet       ' + col.dim('n/a — bounds agents; the control plane is not one'));
   console.log('    allowedRegions ' + col.dim('exempt — see aegis-up.js header (B-series unavailable in the agents\' region)'));
+  // Not a policy gate: an Azure Can't, read here so the refusal happens in plan and
+  // names the quota to request, rather than at ARM with a tracking id (see capacity.js).
+  console.log('    capacity       ' + (R.capacity.ok ? col.green('PASS') : col.red('FAIL')) + col.dim('   ' + R.capacity.detail));
+  if (!R.capacity.ok && R.capacity.request) console.log(col.dim('                   request: ') + R.capacity.request);
   console.log(col.bold('\n  steps when you run --go'));
   console.log('    1. ' + col.dim('you run:') + ' scripts/cloudflare-provision.ps1 -ControlPlane  ' + col.dim('(tunnel + token, DNS, Access app)'));
   console.log('    2. az deployment sub create -> ' + v.resourceGroup + ' + ' + v.vmName + col.red('   — BILLABLE'));
@@ -113,6 +118,7 @@ async function runAegisUp(file, opts = {}) {
     root,
     az: which('az'),
     budget: root ? budgetGate(root) : { ok: false, detail: 'fleet root not found', cap: null, spent: null, unit: '' },
+    capacity: checkCapacity(v.region, v.vmSize),
     tunnelToken: (process.env.CF_TUNNEL_TOKEN || '').trim(),
     pubkey: (rawPub && /[<>]/.test(rawPub)) ? rawPub : (sk.pubkey || ''),
     pubkeyFrom: sk.result.detail,
@@ -156,6 +162,11 @@ async function runAegisUp(file, opts = {}) {
   }
   if (!R.budget.ok) {
     console.log(col.red('\naegis up --go ABORT (nothing created) — budget gate: ' + (R.budget.detail || 'over cap')));
+    return 2;
+  }
+  if (!R.capacity.ok) {
+    console.log(col.red('\naegis up --go ABORT (nothing created) — capacity: ' + R.capacity.detail));
+    if (R.capacity.request) console.log('  request it: ' + R.capacity.request);
     return 2;
   }
 

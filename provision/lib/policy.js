@@ -290,4 +290,4 @@ function setPolicy({ key, value, attest, explicit }) {
   return { path: p, key: spec.file, from: before, to: next, ledgered: rec.ts, syncOutcome };
 }
 
-module.exports = { DEFAULTS, resolvePolicyPath, loadPolicy, checkProvision, showPolicy, setPolicy, setProtection, attestPhrase };
+module.exports = { DEFAULTS, resolvePolicyPath, loadPolicy, checkProvision, showPolicy, setPolicy, setProtection, attestPhrase, ledger };

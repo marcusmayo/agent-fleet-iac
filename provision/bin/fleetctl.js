@@ -23,6 +23,7 @@ Usage:
   fleetctl set-secrets <agent>
   fleetctl backup   init | list <agent> | snapshot <agent>
   fleetctl aegis    plan <contract> | up <contract> --go --attest "<sentence>"
+  fleetctl aegis    grant <contract> vault|contributor [--go --attest "<sentence>"]
   fleetctl restore  <agent> [--blob <name>]
   fleetctl --help
 
@@ -85,7 +86,10 @@ Commands:
 
   aegis     Provision the CONTROL PLANE (not an agent). Its own contract and lane, so
             fleet caps and decommission cannot reach it. Budget gate applies; maxFleet
-            and allowedRegions do not (see provision/lib/aegis-up.js).
+            and allowedRegions do not (see provision/lib/aegis-up.js). 'grant' gives its
+            identity the two rights the template deliberately withholds -- Key Vault read
+            and subscription Contributor -- each an attested, ledgered act, no other role
+            expressible (see provision/lib/aegis-grant.js).
   restore   Pull a backup onto a (re)provisioned agent and restart its containers
             (az vm run-command; VM must be running). Default = newest blob.
 
@@ -165,8 +169,14 @@ async function main(argv) {
     if (sub === 'up' && contractFile) {
       return runAegisUp(contractFile, { go: flags.has('--go'), attest: ai > -1 ? args[ai + 1] : '' });
     }
+    // Post-apply privilege: two verbs, each its own attested + ledgered act (aegis-grant.js).
+    if (sub === 'grant' && contractFile) {
+      const { runAegisGrant } = require('../lib/aegis-grant');
+      return runAegisGrant(contractFile, args[3], { go: flags.has('--go'), attest: ai > -1 ? args[ai + 1] : '' });
+    }
     console.error(c.red('aegis: usage — fleetctl aegis plan <aegis.contract.jsonc>'));
-    console.error(c.red('              fleetctl aegis up   <aegis.contract.jsonc> [--go --attest "<sentence>"]'));
+    console.error(c.red('              fleetctl aegis up    <aegis.contract.jsonc> [--go --attest "<sentence>"]'));
+    console.error(c.red('              fleetctl aegis grant <aegis.contract.jsonc> vault|contributor [--go --attest "<sentence>"]'));
     return 2;
   }
   if (cmd === 'restore') {
