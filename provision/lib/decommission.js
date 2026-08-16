@@ -56,6 +56,25 @@ async function discover(file, d, accountId, cfToken, aegisConfig) {
   const rg = runCapture('az', ['group', 'exists', '-n', s.rgName]);
   s.rg = String(rg.stdout || '').trim() === 'true';
 
+  // The agent's Key Vault. Its name is deterministic per agent (<name>-kv-<hash>) and soft-delete
+  // holds the name for 7 days after the RG goes, so a same-name re-provision (region move,
+  // rebuild) collides with a shell that no longer serves anything. Discover it live in the RG
+  // (to be soft-deleted by the RG delete) or already soft-deleted (a previous teardown), and
+  // PURGE it as the last Azure surface -- purge protection is off by design for exactly this.
+  s.vault = null; s.deletedVault = null;
+  try {
+    if (s.rg) {
+      const kv = runCapture('az', ['keyvault', 'list', '-g', s.rgName, '-o', 'json']);
+      const list = kv.ok ? JSON.parse(kv.stdout || '[]') : [];
+      const hit = (list || []).find((v) => v && typeof v.name === 'string' && v.name.startsWith(name + '-kv-'));
+      if (hit) s.vault = { name: hit.name, location: hit.location };
+    }
+    const dl = runCapture('az', ['keyvault', 'list-deleted', '-o', 'json']);
+    const dead = dl.ok ? JSON.parse(dl.stdout || '[]') : [];
+    const gone = (dead || []).find((v) => v && typeof v.name === 'string' && v.name.startsWith(name + '-kv-'));
+    if (gone) s.deletedVault = { name: gone.name, location: (gone.properties && gone.properties.location) || gone.location || '' };
+  } catch { /* unreadable -> not listed; RG delete still proceeds */ }
+
   try {
     const conf = aegisConfig && fs.existsSync(aegisConfig) ? cfg.load(aegisConfig) : null;
     s.aegis = !!(conf && (conf.agents || []).some((a) => a.name === name));
@@ -68,6 +87,10 @@ async function discover(file, d, accountId, cfToken, aegisConfig) {
 function printPlan(s) {
   const del = (extra) => c.yellow('DELETE') + (extra ? c.dim('  ' + extra) : '');
   const gone = (extra) => c.dim((extra ? extra + ' — ' : '') + 'absent');
+  const vaultLine = s.vault
+    ? del(s.vault.name + ' — soft-deleted by the RG delete, then PURGED so the name is free for a same-name re-provision')
+    : s.deletedVault ? del(s.deletedVault.name + ' — already soft-deleted; PURGE') : gone('vault');
+  console.log(`  8. Key Vault (purge)     ${vaultLine}`);
   console.log(c.bold(`\nTeardown plan for "${s.name}"  (surfaces present are DELETE; absent are skipped)`));
   console.log(`  1 Aegis registry     ${s.aegis ? c.yellow('DEREGISTER') : c.dim('not registered')}`);
   console.log(`  2 local config       ${s.localFile ? del(s.localFile) : gone()}`);
@@ -105,6 +128,23 @@ async function execute(file, d, accountId, cfToken, aegisConfig, s) {
     if (r.status === 0) ok(`Azure RG: deleted ${d.azure.resourceGroup}`);
     else fail('Azure RG delete', new Error(String(r.stderr || '').trim() || `az exit ${r.status}`));
   } else skip(`Azure RG ${d.azure.resourceGroup}`);
+
+  // 3b. Purge the soft-deleted vault so its deterministic name is free again. Purge is
+  // irreversible for the vault's secrets -- they were the agent's own API keys, re-seeded on any
+  // re-provision, and this runs inside an already-attested destructive teardown.
+  const purgeName = (s.vault && s.vault.name) || (s.deletedVault && s.deletedVault.name) || '';
+  const purgeLoc = (s.vault && s.vault.location) || (s.deletedVault && s.deletedVault.location) || d.azure.region || '';
+  if (purgeName) {
+    let purged = false, lastErr = '';
+    // the RG delete is blocking, but the deleted-vault record can lag a few seconds
+    for (let i = 0; i < 6 && !purged; i++) {
+      const pr = runCapture('az', ['keyvault', 'purge', '--name', purgeName, ...(purgeLoc ? ['--location', purgeLoc] : []), '-o', 'none']);
+      if (pr.status === 0) purged = true;
+      else { lastErr = String(pr.stderr || '').split('\n')[0]; if (/not found|NotFound|does not exist/i.test(lastErr)) { await new Promise((r) => setTimeout(r, 5000)); } else break; }
+    }
+    if (purged) ok(`Key Vault: purged soft-deleted ${purgeName} (name free for re-provision)`);
+    else fail('Key Vault purge', new Error(lastErr || 'purge failed'));
+  } else skip('Key Vault purge');
 
   // 4. CF Access app (removes its policies -> frees the service token)
   if (s.app) { try { await cf.deleteApp(accountId, s.app.id, cfToken); ok('CF Access app: deleted'); } catch (e) { fail('CF Access app delete', e); } }
