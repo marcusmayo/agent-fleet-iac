@@ -22,6 +22,7 @@ Usage:
   fleetctl policy   protect <name> | unprotect <name>  --attest "I approve <verb>ing <name>"
   fleetctl set-secrets <agent>
   fleetctl backup   init | list <agent> | snapshot <agent>
+  fleetctl aegis    plan <contract> | up <contract> --go --attest "<sentence>"
   fleetctl restore  <agent> [--blob <name>]
   fleetctl --help
 
@@ -82,6 +83,9 @@ Commands:
             snapshot  force a push now (az vm run-command; VM must be running).
             Decommission --go banks a final snapshot as surface 0 automatically.
 
+  aegis     Provision the CONTROL PLANE (not an agent). Its own contract and lane, so
+            fleet caps and decommission cannot reach it. Budget gate applies; maxFleet
+            and allowedRegions do not (see provision/lib/aegis-up.js).
   restore   Pull a backup onto a (re)provisioned agent and restart its containers
             (az vm run-command; VM must be running). Default = newest blob.
 
@@ -148,6 +152,22 @@ async function main(argv) {
     if (sub === 'list' && args[2]) return bk.runBackupList(args[2]);
     if (sub === 'snapshot' && args[2]) return bk.runBackupSnapshot(args[2]);
     console.error(c.red('backup: usage — fleetctl backup init | list <agent> | snapshot <agent>')); return 2;
+  }
+  // Control plane. A SEPARATE lane from `up` -- see provision/lib/aegis-up.js for which
+  // policy gates apply and why. Keeping it out of `up` is what stops maxFleet, the fleet
+  // registry, and `decommission` from ever applying to the thing that operates them.
+  if (cmd === 'aegis') {
+    const sub = args[1];
+    const contractFile = args[2];
+    const { runAegisUp } = require('../lib/aegis-up');
+    const ai = args.indexOf('--attest');
+    if (sub === 'plan' && contractFile) return runAegisUp(contractFile, { go: false });
+    if (sub === 'up' && contractFile) {
+      return runAegisUp(contractFile, { go: flags.has('--go'), attest: ai > -1 ? args[ai + 1] : '' });
+    }
+    console.error(c.red('aegis: usage — fleetctl aegis plan <aegis.contract.jsonc>'));
+    console.error(c.red('              fleetctl aegis up   <aegis.contract.jsonc> [--go --attest "<sentence>"]'));
+    return 2;
   }
   if (cmd === 'restore') {
     const agent = args[1];

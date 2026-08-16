@@ -11,13 +11,29 @@ function readBudgetSpend(budgetName) {
   if (!r.ok) return { ok: false, reason: (r.stderr || 'az returned non-zero').split('\n')[0] };
   let j;
   try { j = JSON.parse(r.stdout); } catch { return { ok: false, reason: 'could not parse az output' }; }
+  // az returns these as STRINGS ("150.0", "19.7185136511700"), not numbers. A strict
+  // typeof check therefore read a healthy, reporting budget as "no currentSpend yet" --
+  // and because checkBudget degrades an unreadable budget to a warning, the spend cap
+  // silently never enforced anything on any lane. The failure was invisible precisely
+  // because the fallback was graceful: a control that cannot read its input and says so
+  // quietly is indistinguishable from one that is passing.
+  //
+  // Coerce, then verify the coercion. Number('') and Number(null) are 0, which would be
+  // worse than useless here (a 0 spend always passes), so empty/absent is rejected
+  // explicitly rather than allowed to look like a clean bill.
+  const num = (x) => {
+    if (x === null || x === undefined || x === '') return null;
+    const n = typeof x === 'number' ? x : Number(String(x).trim());
+    return Number.isFinite(n) ? n : null;
+  };
   const spend = j && j.currentSpend;
-  if (!spend || typeof spend.amount !== 'number') return { ok: false, reason: `budget "${budgetName}" has no currentSpend yet` };
+  const amount = spend ? num(spend.amount) : null;
+  if (amount === null) return { ok: false, reason: `budget "${budgetName}" has no readable currentSpend` };
   return {
     ok: true,
-    amount: spend.amount,
-    unit: spend.unit || 'USD',
-    limit: (typeof j.amount === 'number' ? j.amount : null),
+    amount,
+    unit: (spend && spend.unit) || 'USD',
+    limit: num(j.amount),
   };
 }
 
