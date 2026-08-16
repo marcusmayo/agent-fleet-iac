@@ -1,0 +1,123 @@
+#cloud-config
+# Control-plane host (Aegis) with Cloudflare Tunnel transport. Placeholders
+# (double-underscore tokens) are injected by aegis-vm.bicep at deploy time. The tunnel
+# token is the ONLY secret in customData and is scrubbed from cloud logs after install.
+#
+# This is NOT an agent image: no docker, no agent repo, no per-agent vault. It installs
+# node (to run aegis.js), the az CLI (fleetctl spawns it), and the two checkouts the
+# control plane needs. Cloudflare credentials are fetched at boot from the pre-existing
+# fleet Key Vault via managed identity, which is what removes the paste-at-startup step
+# the workstation build required.
+#
+# THE LOOPBACK INVARIANT. aegis.js has no authentication of its own; binding to loopback
+# IS its authentication, with Cloudflare Access supplying identity at the edge. So the
+# unit below pins AEGIS_BIND=127.0.0.1 and the tunnel dials 127.0.0.1:7070 from the same
+# host. A bind to 0.0.0.0 would expose an unauthenticated control plane that can create
+# and destroy resource groups, so the unit asserts the bind at start and refuses to run
+# if it has been changed.
+package_update: true
+packages: [git, curl, ca-certificates, jq]
+runcmd:
+  - set -e
+  # --- Cloudflare Tunnel (outbound-only; no inbound ports required) ---
+  - install -m 0755 -d /usr/share/keyrings
+  - curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
+  - echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared noble main' > /etc/apt/sources.list.d/cloudflared.list
+  - apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y cloudflared
+  - cloudflared service install '__CF_TUNNEL_TOKEN__'
+  - grep -rl 'eyJ' /var/lib/cloud/ 2>/dev/null | xargs -r sed -i 's/eyJ[A-Za-z0-9._-]\{16,\}/CF-TOKEN-SCRUBBED/g'
+  # --- Node (aegis.js) + Azure CLI (fleetctl spawns az) ---
+  - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
+  - curl -fsSL https://aka.ms/InstallAzureCLIDeb | bash
+  - 'node --version | tee /var/log/aegis-versions.log; az version --output tsv 2>/dev/null | head -1 | tee -a /var/log/aegis-versions.log'
+  # --- Checkouts: the control plane app, and the IaC it spawns fleetctl from ---
+  - git clone '__AEGIS_REPO_URL__' /home/__ADMIN_USER__/aegis
+  - git clone '__FLEET_REPO_URL__' /home/__ADMIN_USER__/agent-fleet-iac
+  - 'if [ -n "__REPO_REF__" ]; then git -C /home/__ADMIN_USER__/aegis checkout --quiet "__REPO_REF__" || { echo "ABORT: repoRef __REPO_REF__ did not resolve in aegis" | tee /var/log/aegis-provision.log; exit 1; }; fi'
+  - 'git -C /home/__ADMIN_USER__/aegis rev-parse HEAD | tee /var/log/aegis-built-sha.log'
+  # cloud-final runs with no $HOME: --system, never --global, or this aborts the whole
+  # runcmd under set -e (learned the hard way on the agent lane).
+  - git config --system --add safe.directory /home/__ADMIN_USER__/aegis
+  - git config --system --add safe.directory /home/__ADMIN_USER__/agent-fleet-iac
+  - 'cd /home/__ADMIN_USER__/aegis && npm install --omit=dev --no-audit --no-fund 2>&1 | tail -5 | tee -a /var/log/aegis-provision.log'
+  - printf 'KEY_VAULT_NAME=%s\nMSI_CLIENT_ID=%s\nFLEET_IAC_ROOT=%s\n' '__KEY_VAULT_NAME__' '__MSI_CLIENT_ID__' '/home/__ADMIN_USER__/agent-fleet-iac' > /home/__ADMIN_USER__/aegis/.provision-flags
+  # --- Boot-time secret fetch: managed identity -> fleet Key Vault, never on disk ---
+  # Retries absorb RBAC propagation lag; the grant is a POST-APPLY attested step, so on
+  # a first boot this legitimately fails until that step runs. It exits 0 either way and
+  # the unit reports the reason, rather than bricking the whole provision.
+  - |
+    cat > /usr/local/bin/aegis-fetch-secrets <<'EOS'
+    #!/bin/bash
+    set -uo pipefail
+    F=/home/__ADMIN_USER__/aegis/.provision-flags
+    KV="$(grep -E '^KEY_VAULT_NAME=' "$F" | cut -d= -f2-)"
+    CID="$(grep -E '^MSI_CLIENT_ID=' "$F" | cut -d= -f2-)"
+    OUT=/etc/aegis/cf.env
+    install -d -m 0700 /etc/aegis
+    tok() {
+      curl -fsS --get -H Metadata:true \
+        --data-urlencode "api-version=2018-02-01" \
+        --data-urlencode "resource=https://vault.azure.net" \
+        --data-urlencode "client_id=$CID" \
+        "http://169.254.169.254/metadata/identity/oauth2/token" | jq -r .access_token
+    }
+    get() {
+      curl -fsS -H "Authorization: Bearer $1" \
+        "https://$KV.vault.azure.net/secrets/$2?api-version=7.4" | jq -r .value
+    }
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      T="$(tok || true)"
+      if [ -n "${T:-}" ] && [ "$T" != null ]; then
+        A="$(get "$T" cf-api-token || true)"; B="$(get "$T" cf-account-id || true)"
+        if [ -n "${A:-}" ] && [ "$A" != null ] && [ -n "${B:-}" ] && [ "$B" != null ]; then
+          umask 077
+          printf 'CF_API_TOKEN=%s\nCF_ACCOUNT_ID=%s\n' "$A" "$B" > "$OUT"
+          chmod 0600 "$OUT"; echo "aegis: fetched CF credentials from $KV"; exit 0
+        fi
+      fi
+      sleep 15
+    done
+    echo "aegis: WARNING could not read $KV yet -- the Key Vault grant is a post-apply attested step; run it, then: systemctl restart aegis"
+    exit 0
+    EOS
+  - chmod 0755 /usr/local/bin/aegis-fetch-secrets
+  - /usr/local/bin/aegis-fetch-secrets || true
+  # --- The service. Loopback-pinned, and it checks its own pin before starting. ---
+  - |
+    cat > /etc/systemd/system/aegis.service <<'EOS'
+    [Unit]
+    Description=Aegis fleet control plane (loopback only; reached via Cloudflare tunnel)
+    After=network-online.target
+    Wants=network-online.target
+
+    [Service]
+    Type=simple
+    User=__ADMIN_USER__
+    WorkingDirectory=/home/__ADMIN_USER__/aegis
+    EnvironmentFile=-/etc/aegis/cf.env
+    Environment=AEGIS_BIND=127.0.0.1
+    Environment=AEGIS_PORT=7070
+    Environment=FLEET_IAC_ROOT=/home/__ADMIN_USER__/agent-fleet-iac
+    Environment=AZURE_CLIENT_ID=__MSI_CLIENT_ID__
+    # Refuse to start on anything but loopback. aegis.js has no auth of its own, so a
+    # wider bind would publish an unauthenticated control plane; this makes the
+    # invariant enforced rather than documented.
+    ExecStartPre=/bin/sh -c '[ "$AEGIS_BIND" = 127.0.0.1 ] || { echo "REFUSING: AEGIS_BIND=$AEGIS_BIND -- the control plane may only bind loopback"; exit 1; }'
+    ExecStartPre=/usr/local/bin/aegis-fetch-secrets
+    ExecStart=/usr/bin/node aegis.js
+    Restart=on-failure
+    RestartSec=10
+    NoNewPrivileges=true
+    PrivateTmp=true
+
+    [Install]
+    WantedBy=multi-user.target
+    EOS
+  - chown -R __ADMIN_USER__:__ADMIN_USER__ /home/__ADMIN_USER__/aegis /home/__ADMIN_USER__/agent-fleet-iac
+  - systemctl daemon-reload
+  - systemctl enable --now aegis || true
+  - 'sleep 5; systemctl is-active aegis | tee -a /var/log/aegis-provision.log'
+  # Loud, greppable completion marker: `az vm run-command` reads this to confirm the
+  # host finished rather than inferring it from an absence of errors.
+  - 'echo "AEGIS-PROVISION-COMPLETE $(date -u +%FT%TZ)" | tee -a /var/log/aegis-provision.log'
