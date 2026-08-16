@@ -195,8 +195,15 @@ resource backupsContainer 'Microsoft.Storage/storageAccounts/blobServices/contai
 }
 
 // identity -> read secrets
+// The guid is seeded with the DEPLOYMENT name, not just the identity's name. A re-provision
+// (region move, rebuild) creates a NEW identity object under the same uaiName; a name-derived
+// guid then matches the previous deployment's assignment, ARM treats it as already satisfied and
+// reports success while the new principal holds nothing -- the agent 403s reading its own vault
+// at first boot, which is exactly what happened on the first region move. Role-assignment names
+// must be computable before deployment (so the principal id itself cannot seed them); the
+// deployment name is the available value that changes precisely when the identity does.
 resource raKvSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (wantsVault) {
-  name: guid(kv.id, uaiName, roleKvSecretsUser)
+  name: guid(kv.id, uaiName, roleKvSecretsUser, deployment().name)
   scope: kv
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleKvSecretsUser)
@@ -207,7 +214,9 @@ resource raKvSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
 
 // identity -> write backups (data plane; no account keys on the VM)
 resource raStorageBlob 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (wantsBackup) {
-  name: guid(backupStorage.id, uaiName, roleStorageBlobContributor)
+  // same reasoning as raKvSecretsUser: seeded with the deployment so a re-provisioned identity
+  // is actually granted rather than silently matching the old assignment
+  name: guid(backupStorage.id, uaiName, roleStorageBlobContributor, deployment().name)
   scope: backupStorage
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleStorageBlobContributor)
@@ -218,7 +227,9 @@ resource raStorageBlob 'Microsoft.Authorization/roleAssignments@2022-04-01' = if
 
 // deployer -> create the operator secrets post-apply (az keyvault secret set)
 resource raKvSecretsOfficer 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (wantsVault && !empty(deployerObjectId)) {
-  name: guid(kv.id, deployerObjectId, roleKvSecretsOfficer)
+  // deployer id is a parameter (computable before deployment), but the same collision applies to
+  // a re-provisioned vault of the same name -- seed with the deployment for the same reason
+  name: guid(kv.id, deployerObjectId, roleKvSecretsOfficer, deployment().name)
   scope: kv
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleKvSecretsOfficer)
