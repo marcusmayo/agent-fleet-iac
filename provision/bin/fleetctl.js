@@ -263,7 +263,7 @@ async function main(argv) {
         return 0;
       } catch (e) { console.error(c.red(String(e.message || e))); return 2; }
     }
-    console.error(c.red(`policy: unknown subcommand "${sub}" — use: policy show | policy set <key> <value> --attest "..." (keys: maxFleet maxBatch budget allowedRegions defaultRegion budgetName)`));
+    console.error(c.red(`policy: unknown subcommand "${sub}" — use: policy show | policy set <key> <value> --attest "..." (keys: maxFleet maxBatch budget allowedRegions defaultRegion budgetName protectedAgents a2aPairs telegramChatIds)`));
     return 2;
   }
 

@@ -8,6 +8,7 @@ const { stripJsonc } = require('./jsonc');
 const DEFAULTS = {
   maxFleet: 6,
   a2aPairs: [],
+  telegramChatIds: [],
   protectedAgents: [],
   maxBatch: 2,
   allowedRegions: ['eastus2'],
@@ -91,11 +92,17 @@ const SETTABLE = {
   budgetName:     { file: 'budgetName',          kind: 'str', re: /^[A-Za-z0-9_-]{1,63}$/ },
   protectedAgents:{ file: 'protectedAgents',     kind: 'list', itemRe: /^[a-z][a-z0-9-]{1,23}$/, itemDesc: 'agent names', allowEmpty: true },   // `none` clears
   // Agent-to-agent relay allowlist. Each item is a DIRECTED pair "from>to": permitting
-  // bosun>heimdall does NOT permit the reverse, because the two directions are different
+  // from>to does NOT permit to>from, because the two directions are different
   // grants. Empty (the default) means no relay is possible at all -- the capability is
   // off until an operator attests a specific pair, rather than on with a way to switch
   // it off. `none` clears.
-  a2aPairs:       { file: 'a2aPairs',            kind: 'list', itemRe: /^[a-z][a-z0-9-]{1,23}>[a-z][a-z0-9-]{1,23}$/, itemDesc: 'directed pairs like bosun>heimdall', allowEmpty: true },
+  a2aPairs:       { file: 'a2aPairs',            kind: 'list', itemRe: /^[a-z][a-z0-9-]{1,23}>[a-z][a-z0-9-]{1,23}$/, itemDesc: 'directed pairs like from>to', allowEmpty: true },
+  // Telegram allowlist: the numeric chat ids that may command the fleet through the plane's
+  // bot. Empty (the default) means the Telegram lane ignores everyone -- the capability is
+  // off until an operator attests an id, never on with a way to switch it off. Unknown chats
+  // are ignored silently (a public bot must not confirm it exists) and logged once per id,
+  // which is how an operator learns their own id before attesting it. `none` clears.
+  telegramChatIds:{ file: 'telegramChatIds',     kind: 'list', itemRe: /^-?[0-9]{5,20}$/, itemDesc: 'numeric Telegram chat ids', allowEmpty: true },
 };
 
 // Parse + shape-validate; throws with the ledgerable reason on bad input.
@@ -233,8 +240,20 @@ function setPolicy({ key, value, attest, explicit }) {
   const src2 = fs.readFileSync(p, 'utf8');
   const token = `"${spec.file}": ${JSON.stringify(before)}`;
   const hits = src2.split(token).length - 1;
-  if (hits !== 1) throw new Error(`policy set aborted: expected exactly one \`${token}\` in ${p}, found ${hits} -- edit by hand`);
-  fs.writeFileSync(p, src2.replace(token, `"${spec.file}": ${JSON.stringify(next)}`));
+  // A key the file has never carried (added to DEFAULTS after the file was written, e.g. a
+  // newer allowlist) is inserted once, before the closing brace, at its default value; the
+  // guarded replace below then proceeds exactly as for a key that was already present.
+  // Any other count is still an abort: the file is edited only through this gate.
+  let src3 = src2;
+  if (hits === 0 && !new RegExp(`"${spec.file}"\\s*:`).test(src2) && JSON.stringify(before) === JSON.stringify(DEFAULTS[spec.file])) {
+    const close = src2.lastIndexOf('}');
+    if (close < 0) throw new Error(`policy set aborted: ${p} has no closing brace -- edit by hand`);
+    const head = src2.slice(0, close).replace(/\s+$/, '');
+    src3 = head + (head.endsWith('{') ? '' : (head.endsWith(',') ? '' : ',')) + `\n  ${token}\n` + src2.slice(close);
+  }
+  const hits3 = src3.split(token).length - 1;
+  if (hits3 !== 1) throw new Error(`policy set aborted: expected exactly one \`${token}\` in ${p}, found ${hits3} -- edit by hand`);
+  fs.writeFileSync(p, src3.replace(token, `"${spec.file}": ${JSON.stringify(next)}`));
   const after = loadPolicy(p)[spec.file];
   if (JSON.stringify(after) !== JSON.stringify(next)) throw new Error(`policy set verification failed: re-read ${spec.file}=${JSON.stringify(after)}`);
   // Azure budget-object sync (2nd step of the budget control): the GATE mutation
