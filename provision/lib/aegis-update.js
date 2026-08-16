@@ -23,7 +23,8 @@ function planScript() {
     'for R in aegis agent-fleet-iac; do D=/home/$U/$R;',
     '  sudo -u $U -H git -C "$D" fetch -q origin 2>/dev/null || { echo "$R fetch-failed"; continue; }',
     '  L=$(sudo -u $U -H git -C "$D" rev-parse --short HEAD); B=$(sudo -u $U -H git -C "$D" rev-parse --abbrev-ref HEAD); RM=$(sudo -u $U -H git -C "$D" rev-parse --short "origin/$B" 2>/dev/null || echo unknown);',
-    '  DIRTY=$(sudo -u $U -H git -C "$D" status --porcelain 2>/dev/null | wc -l);',
+    // tracked changes only: the ledger and backups are untracked by design and never block a pull
+    '  DIRTY=$(sudo -u $U -H git -C "$D" status --porcelain --untracked-files=no 2>/dev/null | wc -l);',
     '  echo "$R local=$L remote=$RM branch=$B dirty=$DIRTY"; done',
     'echo "unit=$(systemctl is-active aegis)"',
   ].join('\n') + '\n';
