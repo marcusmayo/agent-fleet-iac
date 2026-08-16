@@ -19,6 +19,19 @@ package_update: true
 packages: [git, curl, ca-certificates, jq]
 runcmd:
   - set -e
+  # --- Swap: this size has 1 GiB of RAM and the az CLI is Python. Its footprint is
+  # bursty (a few hundred MB during a deployment) rather than sustained, which is
+  # exactly what swap absorbs well. Without it a single `fleetctl up` could OOM-kill
+  # the control plane mid-provision -- the worst possible moment to lose it.
+  - fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048
+  - chmod 600 /swapfile
+  - mkswap /swapfile
+  - swapon /swapfile
+  - grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  # Prefer RAM; only reach for swap under real pressure.
+  - sysctl -w vm.swappiness=10
+  - grep -q '^vm.swappiness' /etc/sysctl.conf || echo 'vm.swappiness=10' >> /etc/sysctl.conf
+  - 'free -m | tee -a /var/log/aegis-provision.log'
   # --- Cloudflare Tunnel (outbound-only; no inbound ports required) ---
   - install -m 0755 -d /usr/share/keyrings
   - curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
@@ -118,6 +131,70 @@ runcmd:
   - systemctl daemon-reload
   - systemctl enable --now aegis || true
   - 'sleep 5; systemctl is-active aegis | tee -a /var/log/aegis-provision.log'
+  # --- Ledger backup: the ONE thing here that cannot be rebuilt -------------------
+  # What lives on this host: aegis-audit.jsonl (the hash-chained governance record),
+  # and aegis.config.json (agent registry + per-agent Cloudflare SERVICE-TOKEN SECRETS).
+  # Only the first is backed up. The config is deliberately excluded: it carries fleet
+  # credentials, and it is fully recoverable by rotating tokens and re-registering, so
+  # copying it to blob storage would put credentials in a second place for no gain.
+  #
+  # THE TRUNCATION PROBLEM. A chain proves nothing was MODIFIED; it says nothing about
+  # whether records were REMOVED from the end. An older restored ledger is a valid
+  # prefix -- it verifies perfectly while having silently dropped everything since.
+  # Introducing a restore path for a tamper-evident log therefore creates a way to erase
+  # history that passes its own integrity check. So each snapshot also writes a head
+  # marker (seq + hash + count) alongside, and the marker is what makes a short restore
+  # detectable: a restored ledger whose head is older than the last known marker is
+  # truncated, not merely stale. Cross-anchoring into the agents' chains is the stronger
+  # form of this and is a later step; the marker is the cheap version that closes the
+  # hole today.
+  - |
+    cat > /usr/local/bin/aegis-ledger-backup <<'EOS'
+    #!/bin/bash
+    set -uo pipefail
+    LED=/home/__ADMIN_USER__/aegis/aegis-audit.jsonl
+    DEST=/home/__ADMIN_USER__/aegis/ledger-backups
+    [ -f "$LED" ] || { echo "aegis-ledger-backup: no ledger yet"; exit 0; }
+    install -d -m 0700 "$DEST"
+    TS="$(date -u +%Y%m%dT%H%M%SZ)"
+    cp "$LED" "$DEST/aegis-audit-$TS.jsonl"
+    # Head marker: last chained record's seq + hash, and the record count. Compared on
+    # restore, this is what distinguishes "older copy" from "records removed".
+    LAST="$(grep -c . "$LED")"
+    HEAD="$(tail -1 "$LED")"
+    SEQ="$(printf '%s' "$HEAD" | sed -n 's/.*"seq":\([0-9]*\).*/\1/p')"
+    HSH="$(printf '%s' "$HEAD" | sed -n 's/.*"hash":"\([0-9a-f]*\)".*/\1/p')"
+    printf '{"ts":"%s","lines":%s,"headSeq":%s,"headHash":"%s"}\n' "$TS" "${LAST:-0}" "${SEQ:-0}" "${HSH:-}" \
+      | tee -a "$DEST/HEAD-MARKERS.jsonl" > "$DEST/aegis-audit-$TS.head.json"
+    # Keep 30 snapshots; markers are append-only and never pruned -- they are the record
+    # of what the head WAS, and pruning them would defeat the point.
+    ls -1t "$DEST"/aegis-audit-*.jsonl 2>/dev/null | tail -n +31 | xargs -r rm -f
+    echo "aegis-ledger-backup: $TS lines=${LAST:-0} headSeq=${SEQ:-0}"
+    EOS
+  - chmod 0755 /usr/local/bin/aegis-ledger-backup
+  - |
+    cat > /etc/systemd/system/aegis-ledger-backup.service <<'EOS'
+    [Unit]
+    Description=Snapshot the Aegis governance ledger + record its head marker
+    [Service]
+    Type=oneshot
+    User=__ADMIN_USER__
+    ExecStart=/usr/local/bin/aegis-ledger-backup
+    EOS
+  - |
+    cat > /etc/systemd/system/aegis-ledger-backup.timer <<'EOS'
+    [Unit]
+    Description=Daily Aegis ledger snapshot
+    [Timer]
+    OnCalendar=daily
+    Persistent=true
+    RandomizedDelaySec=1800
+    [Install]
+    WantedBy=timers.target
+    EOS
+  - systemctl daemon-reload
+  - systemctl enable --now aegis-ledger-backup.timer || true
+  - /usr/local/bin/aegis-ledger-backup || true
   # Loud, greppable completion marker: `az vm run-command` reads this to confirm the
   # host finished rather than inferring it from an absence of errors.
   - 'echo "AEGIS-PROVISION-COMPLETE $(date -u +%FT%TZ)" | tee -a /var/log/aegis-provision.log'

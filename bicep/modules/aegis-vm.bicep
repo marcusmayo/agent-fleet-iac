@@ -18,10 +18,20 @@
 param aegisName string = 'aegis'
 
 @description('Azure region.')
-param location string = 'eastus2'
+// northcentralus, not eastus2: the B-series is NotAvailableForSubscription in
+// eastus2/eastus/westus2 for this subscription, and the control plane runs 24/7 so the
+// difference is structural rather than marginal (~$7/mo here vs ~$31 for the cheapest
+// eastus2 alternative). Nothing about a control plane needs regional proximity to the
+// agents: it reaches them through Cloudflare tunnels over the public internet and reaches
+// Azure through a global endpoint, so the split costs nothing operationally.
+param location string = 'northcentralus'
 
 @description('VM size. The control plane spawns fleetctl and serves one operator; it does not build images.')
-param vmSize string = 'Standard_B2s_v2'
+// B2ats_v2 (2 vCPU / 1 GiB). B2s_v2 was the earlier note but is NotAvailableForSubscription;
+// this is the cheapest size actually offered. 1 GiB is tight for the az CLI (Python, bursty),
+// so cloud-init adds swap. Escape hatch if it thrashes: Standard_B2als_v2 (4 GiB, same
+// family and region) is a size change and nothing else.
+param vmSize string = 'Standard_B2ats_v2'
 
 @description('Admin username on the VM.')
 param adminUsername string = 'aegisadmin'
