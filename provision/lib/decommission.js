@@ -56,6 +56,19 @@ async function discover(file, d, accountId, cfToken, aegisConfig) {
   const rg = runCapture('az', ['group', 'exists', '-n', s.rgName]);
   s.rg = String(rg.stdout || '').trim() === 'true';
 
+  // Locks on the RG. The protection mirror is one CanNotDelete lock named fleet-protect: when
+  // policy says the agent is NOT protected but that lock is still there, it is an orphan of a
+  // failed unprotect sync (seen live: an unprotect ledgered ok with syncOutcome AuthorizationFailed
+  // left the lock behind, and the RG delete was refused with ScopeLocked while every Cloudflare
+  // surface was already gone). Read them here so the plan says so, and --go reconciles the
+  // mirror -- policy is the source of truth -- before the RG delete. A lock with any other name
+  // is somebody else's decision and refuses the teardown instead.
+  s.locks = [];
+  if (s.rg) {
+    try { const lk = runCapture('az', ['lock', 'list', '-g', s.rgName, '-o', 'json']); const arr = lk.ok ? JSON.parse(lk.stdout || '[]') : []; s.locks = (arr || []).map((l) => ({ name: l.name, level: l.level })).filter((l) => l.name); }
+    catch { s.locks = []; }
+  }
+
   // The agent's Key Vault. Its name is deterministic per agent (<name>-kv-<hash>) and soft-delete
   // holds the name for 7 days after the RG goes, so a same-name re-provision (region move,
   // rebuild) collides with a shell that no longer serves anything. Discover it live in the RG
@@ -91,6 +104,10 @@ function printPlan(s) {
     ? del(s.vault.name + ' — soft-deleted by the RG delete, then PURGED so the name is free for a same-name re-provision')
     : s.deletedVault ? del(s.deletedVault.name + ' — already soft-deleted; PURGE') : gone('vault');
   console.log(`  8. Key Vault (purge)     ${vaultLine}`);
+  for (const l of (s.locks || [])) {
+    const ours = l.name === 'fleet-protect';
+    console.log('  !  RG lock              ' + (ours ? c.yellow(l.name + ' (' + l.level + ') — orphan of a failed unprotect sync; --go removes it before the RG delete') : c.red(l.name + ' (' + l.level + ') — NOT the fleet mirror; the RG delete will be refused until it is removed by whoever set it')));
+  }
   console.log(c.bold(`\nTeardown plan for "${s.name}"  (surfaces present are DELETE; absent are skipped)`));
   console.log(`  1 Aegis registry     ${s.aegis ? c.yellow('DEREGISTER') : c.dim('not registered')}`);
   console.log(`  2 local config       ${s.localFile ? del(s.localFile) : gone()}`);
@@ -109,9 +126,10 @@ function printPlan(s) {
 }
 
 async function execute(file, d, accountId, cfToken, aegisConfig, s) {
+  const failures = [];
   const ok = (m) => console.log(c.green(`  ✓ ${m}`));
   const skip = (m) => console.log(c.dim(`  – ${m} (already gone)`));
-  const fail = (m, e) => console.log(c.red(`  ✗ ${m}: ${e && e.message ? e.message : e}`));
+  const fail = (m, e) => { failures.push(m); console.log(c.red(`  ✗ ${m}: ${e && e.message ? e.message : e}`)); };
 
   // 1. Aegis registry (local, safe first — reuses deregister; file still on disk here)
   if (s.aegis) { try { runDeregister(file, { aegisConfig }); ok('Aegis: deregistered'); } catch (e) { fail('Aegis deregister', e); } }
@@ -122,11 +140,24 @@ async function execute(file, d, accountId, cfToken, aegisConfig, s) {
   else skip('local config');
 
   // 3. Azure RG (blocking so the connector dies before the tunnel delete)
+  let rgGone = !s.rg;
   if (s.rg) {
-    console.log(c.dim(`  … deleting ${d.azure.resourceGroup} (blocking; a few minutes) …`));
-    const r = runCapture('az', ['group', 'delete', '-n', d.azure.resourceGroup, '--yes']);
-    if (r.status === 0) ok(`Azure RG: deleted ${d.azure.resourceGroup}`);
-    else fail('Azure RG delete', new Error(String(r.stderr || '').trim() || `az exit ${r.status}`));
+    const foreign = (s.locks || []).filter((l) => l.name !== 'fleet-protect');
+    const mirror = (s.locks || []).filter((l) => l.name === 'fleet-protect');
+    if (foreign.length) {
+      fail('Azure RG delete', new Error('refused: lock(s) not set by the fleet: ' + foreign.map((l) => l.name + ' (' + l.level + ')').join(', ') + ' — remove them first (az lock delete) or leave the RG'));
+    } else {
+      for (const l of mirror) {
+        // policy already said "not protected" (the gate above), so this lock is an orphan mirror
+        const lr = runCapture('az', ['lock', 'delete', '--name', l.name, '-g', d.azure.resourceGroup]);
+        if (lr.status === 0) ok(`Azure RG lock: removed orphan mirror ${l.name} (policy says not protected)`);
+        else fail(`Azure RG lock delete (${l.name})`, new Error(String(lr.stderr || '').trim() || `az exit ${lr.status}`));
+      }
+      console.log(c.dim(`  … deleting ${d.azure.resourceGroup} (blocking; a few minutes) …`));
+      const r = runCapture('az', ['group', 'delete', '-n', d.azure.resourceGroup, '--yes']);
+      if (r.status === 0) { rgGone = true; ok(`Azure RG: deleted ${d.azure.resourceGroup}`); }
+      else fail('Azure RG delete', new Error(String(r.stderr || '').trim() || `az exit ${r.status}`));
+    }
   } else skip(`Azure RG ${d.azure.resourceGroup}`);
 
   // 3b. Purge the soft-deleted vault so its deterministic name is free again. Purge is
@@ -134,7 +165,8 @@ async function execute(file, d, accountId, cfToken, aegisConfig, s) {
   // re-provision, and this runs inside an already-attested destructive teardown.
   const purgeName = (s.vault && s.vault.name) || (s.deletedVault && s.deletedVault.name) || '';
   const purgeLoc = (s.vault && s.vault.location) || (s.deletedVault && s.deletedVault.location) || d.azure.region || '';
-  if (purgeName) {
+  // a vault that is still live in an RG that did NOT go has nothing to purge yet
+  if (purgeName && (rgGone || s.deletedVault)) {
     let purged = false, lastErr = '';
     // the RG delete is blocking, but the deleted-vault record can lag a few seconds
     for (let i = 0; i < 6 && !purged; i++) {
@@ -180,6 +212,7 @@ async function execute(file, d, accountId, cfToken, aegisConfig, s) {
   // 7. CF tunnel (connector dead after the RG delete)
   if (s.tunnel) { try { await cf.deleteTunnel(accountId, s.tunnel.id, cfToken); ok('CF tunnel: deleted'); } catch (e) { fail('CF tunnel delete', e); } }
   else skip('CF tunnel');
+  return failures;
 }
 
 async function runDecommission(file, opts = {}) {
@@ -236,7 +269,13 @@ async function runDecommission(file, opts = {}) {
   // Surface 0: bank a final snapshot into the fleet backup store (best-effort,
   // never blocks -- the store outlives the agent, so this IS the undo button).
   require('./backup').finalSnapshot(d.register.name);
-  await execute(file, d, accountId, cfToken, aegisPath, s);
+  const failures = await execute(file, d, accountId, cfToken, aegisPath, s);
+  if (failures && failures.length) {
+    // A teardown that could not finish must not read as finished: the panel and the ledger both
+    // key off this line, and "complete" over a locked RG left a VM running with no front door.
+    console.log(c.red(`\ndecommission ${d.register.name} INCOMPLETE — ${failures.length} surface(s) failed: ${failures.join('; ')}. Re-run after fixing; every surface is idempotent.`));
+    return 1;
+  }
   console.log(c.green(`\ndecommission ${d.register.name} complete. Refresh fleet in Aegis to drop the card (deregister already updated the config).`));
   return 0;
 }
