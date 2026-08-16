@@ -102,4 +102,17 @@ function findFleetRoot() {
   return null;
 }
 
-module.exports = { c, runCapture, which, resolveBash, findFleetRoot };
+// The signed-in deployer's object id, for ledger records: $DEPLOYER_OBJECT_ID wins (the hosted
+// plane pins it to its managed identity), else derived once from the az session (a workstation
+// shell); null when neither resolves. Cached per process -- one az call at most.
+let _deployerId;
+function deployerObjectId() {
+  if (_deployerId !== undefined) return _deployerId;
+  const env = (process.env.DEPLOYER_OBJECT_ID || '').trim();
+  if (/^[0-9a-f-]{36}$/i.test(env)) { _deployerId = env; return _deployerId; }
+  const r = runCapture('az', ['ad', 'signed-in-user', 'show', '--query', 'id', '-o', 'tsv']);
+  const id = r.ok ? (r.stdout || '').trim() : '';
+  _deployerId = /^[0-9a-f-]{36}$/i.test(id) ? id : null;
+  return _deployerId;
+}
+module.exports = { c, runCapture, which, resolveBash, findFleetRoot, deployerObjectId };

@@ -148,7 +148,7 @@ function ledger(policyPath, entry) {
   const rec = {
     ts: new Date().toISOString(),
     actor: (require('node:os').userInfo().username || 'unknown'),
-    deployerObjectId: (process.env.DEPLOYER_OBJECT_ID || '').trim() || null,
+    deployerObjectId: require('./util').deployerObjectId(),
     ...entry,
   };
   fs.appendFileSync(auditPath(policyPath), JSON.stringify(rec) + '\n');

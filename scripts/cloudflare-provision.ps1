@@ -137,11 +137,23 @@ function Ensure-AccessApp {
   $pol  = $pols | Where-Object { $_.name -eq "$AppName-operator" } | Select-Object -First 1
   $pbody = @{ name = "$AppName-operator"; decision = "allow"; include = @(@{ email = @{ email = $OperatorEmail } }) }
   if ($pol) {
-    # An existing policy may be a MIGRATED reusable policy, which Cloudflare's per-app
-    # policy endpoints now reject (PUT and DELETE both 400). It already allows the
-    # operator and works, so leave it in place. To change the operator, delete the app
-    # in the dashboard (or via API) and re-run, which recreates the policy fresh.
-    Write-Host "   policy '$AppName-operator' already present (left as-is)"
+    # Never "left as-is" without reading it: a policy that allows a different address than
+    # -OperatorEmail is a lockout at PIN time, and a re-run that reports success while leaving
+    # it in place hides exactly that. Read the allowed emails; if they are not exactly the
+    # operator, correct with PUT (works for per-app policies); a MIGRATED reusable policy
+    # rejects PUT (400) -- then refuse loudly with the recovery, rather than pretend.
+    $allowed = @(($pol.include | ForEach-Object { if ($_.email) { $_.email.email } }) | Where-Object { $_ })   # outer @(): a single result must stay an array (a bare string's [0] is its first character)
+    if ($allowed.Count -eq 1 -and $allowed[0] -eq $OperatorEmail) {
+      Write-Host "   policy '$AppName-operator' already allows $OperatorEmail (left as-is)"
+    } else {
+      Write-Host "   policy '$AppName-operator' allows [$($allowed -join ',')], not $OperatorEmail - correcting" -ForegroundColor Yellow
+      try {
+        Invoke-CF PUT "/accounts/$AccountId/access/apps/$id/policies/$($pol.id)" $pbody | Out-Null
+        Write-Host "   policy '$AppName-operator' now allows $OperatorEmail (updated)"
+      } catch {
+        throw "Access policy '$AppName-operator' on $AppHost allows [$($allowed -join ',')], not $OperatorEmail, and could not be updated ($($_.Exception.Message)). That is a lockout, not a warning: delete the app '$AppName' in Zero Trust (or via API) and re-run, which recreates the policy for $OperatorEmail."
+      }
+    }
   } else {
     Invoke-CF POST "/accounts/$AccountId/access/apps/$id/policies" $pbody | Out-Null
     Write-Host "   policy '$AppName-operator' allow $OperatorEmail (created)"

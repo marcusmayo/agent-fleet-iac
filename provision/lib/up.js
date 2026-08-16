@@ -11,6 +11,7 @@ const cf = require('./cfapi');
 const cfg = require('./aegisconfig');
 const policy = require('./policy');
 const budget = require('./budget');
+const { checkCapacity } = require('./capacity');
 const { runRegister } = require('./register');
 const backup = require('./backup');
 
@@ -47,6 +48,9 @@ function gather(v, opts) {
     pwsh: resolvePwsh(),
     bash: resolveBash(),
     az: which('az'),
+    // Azure capacity: offered SKU + family/regional quota headroom, read here so a refusal
+    // happens in plan and names the quota to request (see capacity.js; found on the aegis lane).
+    capacity: checkCapacity(v.region, d.azure.vmSize),
     cfToken: process.env.CF_API_TOKEN || '',
     accountId: process.env.CF_ACCOUNT_ID || '',
     operatorEmail: (v.operatorEmail || process.env.CF_OPERATOR_EMAIL || '').trim(),   // contract field wins (per-agent)
@@ -98,6 +102,8 @@ function printPlan(v, R) {
   console.log(`  fleet           ${R.fleet.length}/${R.pol.maxFleet} registered${R.fleet.length ? '  (' + R.fleet.join(', ') + ')' : ''}`);
   console.log(`  region          ${v.region} ${regionOk ? c.green('(allowed)') : c.red('NOT allowed — allowedRegions: ' + (R.pol.allowedRegions || []).join(', '))}`);
   console.log(`  gate            ${gate.ok ? c.green('PASS') : c.red('BLOCK — ' + gate.errors.join('; '))}`);
+  console.log(`  capacity        ${R.capacity.ok ? c.green('PASS') : c.red('FAIL')} ${c.dim(d.azure.vmSize + ' in ' + v.region + ' — ' + R.capacity.detail)}`);
+  if (!R.capacity.ok && R.capacity.request) console.log(c.dim('                  request: ') + R.capacity.request);
   console.log(c.dim(`  policy          ${R.pol.source}`));
 }
 
@@ -193,6 +199,12 @@ async function runUp(file, opts = {}) {
   if (!bgate.ok) {
     console.log(c.red('\nup --go ABORT (nothing created) — over the monthly budget.'));
     console.log(c.dim('  Raise maxMonthlyBudgetUsd in aegis.policy.jsonc, or wait for the next billing cycle.'));
+    return 2;
+  }
+  // Capacity: an Azure Can't the lane sees before ARM does -- offered is not permitted.
+  if (!R.capacity.ok) {
+    console.log(c.red('\nup --go ABORT (nothing created) — capacity: ' + R.capacity.detail));
+    if (R.capacity.request) console.log('  request it: ' + R.capacity.request);
     return 2;
   }
 

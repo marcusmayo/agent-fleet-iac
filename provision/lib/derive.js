@@ -12,7 +12,9 @@ function derive(v) {
       resourceGroup: `rg-${v.name}`,
       region: v.region,
       vmName: `${v.name}-vm`,
-      vmSize: 'Standard_D2s_v3', // main.bicep default
+      // The size that will actually deploy: the bicepparam reads $VM_SIZE, else the main.bicep
+      // default -- read the same way here so plan, capacity preflight and deployment agree.
+      vmSize: (process.env.VM_SIZE || '').trim() || 'Standard_D2s_v3',
       profile: v.profile,
       publicIpEnabled: v.sshCidr !== '',
       sshCidr: v.sshCidr,
