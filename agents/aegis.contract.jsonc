@@ -7,5 +7,5 @@
   "region": "northcentralus",
   "vmSize": "Standard_B2ats_v2",
   "sshAccessCidr": "",
-  "operatorEmail": "marcus@keel-pm.com"
+  "operatorEmail": "keel@keel-pm.com"
 }
