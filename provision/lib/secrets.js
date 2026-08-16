@@ -37,6 +37,32 @@ const PROFILE_SECRETS = {
 // A Forbidden from the vault's data plane is one of two things: the deployer's Secrets Officer
 // grant was skipped (empty DEPLOYER_OBJECT_ID at deploy) or has not propagated yet. Say which
 // fix to try, with the exact commands, instead of a bare error.
+// Post-deploy vault roles, read back and repaired. The template's assignments are named by a
+// deterministic guid whose inputs do not change on a re-provision, so ARM can report success
+// while the NEW identity holds nothing (see modules/vm.bicep). Here the principal is READ from
+// Azure and the assignment created if absent -- immune to guid collisions, idempotent ("exists"
+// is success), and never fatal: the deploy already happened, this repairs its last mile.
+//   agent identity -> Key Vault Secrets User    (the agent reads its runtime secrets at boot)
+//   deployer       -> Key Vault Secrets Officer (so `set-secrets` can write them)
+function ensureVaultRoles(name, deployerId) {
+  const rg = 'rg-' + name;
+  const kv = runCapture('az', ['keyvault', 'list', '-g', rg, '--query', '[0].id', '-o', 'tsv']);
+  const kvId = kv.ok ? (kv.stdout || '').trim() : '';
+  if (!kvId) { console.log(c.yellow('  vault roles: no Key Vault in ' + rg + ' (skipped, non-fatal)')); return; }
+  const grant = (objectId, principalType, role, label) => {
+    if (!objectId) { console.log(c.yellow('  vault roles: no ' + label + ' object id (skipped)')); return; }
+    const have = runCapture('az', ['role', 'assignment', 'list', '--assignee', objectId, '--scope', kvId, '--query', "[?roleDefinitionName=='" + role + "'] | length(@)", '-o', 'tsv']);
+    if (have.ok && (have.stdout || '').trim() === '1') { console.log(c.green('  vault roles: ' + label + ' already holds ' + role)); return; }
+    const r = runCapture('az', ['role', 'assignment', 'create', '--assignee-object-id', objectId,
+      '--assignee-principal-type', principalType, '--role', role, '--scope', kvId, '-o', 'none']);
+    const dup = !r.ok && /exists/i.test(r.stderr || '');
+    console.log((r.ok || dup) ? c.green('  vault roles: ' + label + ' granted ' + role) : c.yellow('  vault roles: ' + label + ' ' + role + ' FAILED (non-fatal): ' + (r.stderr || '').split('\n')[0]));
+  };
+  const pid = runCapture('az', ['identity', 'show', '-g', rg, '-n', name + '-identity', '--query', 'principalId', '-o', 'tsv']);
+  grant(pid.ok ? (pid.stdout || '').trim() : '', 'ServicePrincipal', 'Key Vault Secrets User', 'agent identity');
+  grant((deployerId || '').trim(), 'User', 'Key Vault Secrets Officer', 'deployer');
+}
+
 function forbiddenHint(vault, rg) {
   return c.yellow('  Forbidden on the vault data plane: either the deploy did not grant you Key Vault Secrets Officer (empty DEPLOYER_OBJECT_ID) or the grant is still propagating (up to ~10 min).') + '\n' +
     c.dim('  check:  az role assignment list --assignee <your object id> --scope <vault id> -o table   (vault id: az keyvault show -n ' + vault + ' -g ' + rg + ' --query id -o tsv)') + '\n' +
@@ -92,4 +118,4 @@ function runSetSecrets(agent) {
   return 0;
 }
 
-module.exports = { resolveVault, setSecret, runSetSecrets };
+module.exports = { resolveVault, setSecret, ensureVaultRoles, runSetSecrets };

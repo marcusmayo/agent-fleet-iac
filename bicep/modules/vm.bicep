@@ -194,16 +194,18 @@ resource backupsContainer 'Microsoft.Storage/storageAccounts/blobServices/contai
   }
 }
 
-// identity -> read secrets
-// The guid is seeded with the DEPLOYMENT name, not just the identity's name. A re-provision
-// (region move, rebuild) creates a NEW identity object under the same uaiName; a name-derived
-// guid then matches the previous deployment's assignment, ARM treats it as already satisfied and
-// reports success while the new principal holds nothing -- the agent 403s reading its own vault
-// at first boot, which is exactly what happened on the first region move. Role-assignment names
-// must be computable before deployment (so the principal id itself cannot seed them); the
-// deployment name is the available value that changes precisely when the identity does.
+// identity -> read secrets.
+// This assignment is BEST-EFFORT and is verified after the deploy by `up` (ensureVaultRoles),
+// which is the layer that can actually guarantee it. Why: the name is a deterministic guid, and
+// on a re-provision every input to it is unchanged (same vault name, same identity name), so ARM
+// matches the previous deployment's assignment and reports success while the NEW principal --
+// a different object under the same name -- holds nothing. The agent then 403s reading its own
+// vault at first boot. Seeding the guid with deployment() does not fix it either: inside a
+// module, deployment().name is the module's own name ('<agent>-vm-deploy'), constant per agent.
+// Role-assignment names must be computable before deployment, so the principal id cannot seed
+// them. The reconciliation therefore lives in up.js, where the principal can be read back.
 resource raKvSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (wantsVault) {
-  name: guid(kv.id, uaiName, roleKvSecretsUser, deployment().name)
+  name: guid(kv.id, uaiName, roleKvSecretsUser)
   scope: kv
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleKvSecretsUser)
@@ -214,9 +216,9 @@ resource raKvSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
 
 // identity -> write backups (data plane; no account keys on the VM)
 resource raStorageBlob 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (wantsBackup) {
-  // same reasoning as raKvSecretsUser: seeded with the deployment so a re-provisioned identity
-  // is actually granted rather than silently matching the old assignment
-  name: guid(backupStorage.id, uaiName, roleStorageBlobContributor, deployment().name)
+  // best-effort like raKvSecretsUser; the fleet backup store's role is reconciled post-deploy by
+  // backup.ensureAgentBackup, which reads the principal back and is idempotent
+  name: guid(backupStorage.id, uaiName, roleStorageBlobContributor)
   scope: backupStorage
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleStorageBlobContributor)
@@ -227,9 +229,8 @@ resource raStorageBlob 'Microsoft.Authorization/roleAssignments@2022-04-01' = if
 
 // deployer -> create the operator secrets post-apply (az keyvault secret set)
 resource raKvSecretsOfficer 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (wantsVault && !empty(deployerObjectId)) {
-  // deployer id is a parameter (computable before deployment), but the same collision applies to
-  // a re-provisioned vault of the same name -- seed with the deployment for the same reason
-  name: guid(kv.id, deployerObjectId, roleKvSecretsOfficer, deployment().name)
+  // best-effort; reconciled post-deploy by up.js (ensureVaultRoles) for the same reason
+  name: guid(kv.id, deployerObjectId, roleKvSecretsOfficer)
   scope: kv
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleKvSecretsOfficer)

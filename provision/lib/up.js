@@ -298,6 +298,12 @@ async function runUp(file, opts = {}) {
     console.log(c.green(`\nup --go OK — ${v.name} provisioned. cloud-init is building the image (~4-8 min).`));
     console.log(c.green('  The VM is WAITING for its vault seed — it self-configures once seeded (no SSH).'));
     backup.ensureAgentBackup(v.name);
+    // The template's vault role assignments cannot be trusted on a re-provision (deterministic
+    // guid, unchanged inputs, new principal): read them back and repair. This is what stopped the
+    // first region move dead -- the agent 403d on its own vault for an entire boot while every
+    // other signal said healthy.
+    try { require('./secrets').ensureVaultRoles(v.name, deployerObjectId() || ''); }
+    catch (e) { console.log(c.yellow('  vault roles: check failed (non-fatal): ' + e.message)); }
     console.log(c.bold('  NEXT (within ~10 min): seed the vault so it comes up on its own →'));
     console.log(c.bold('    fleetctl set-secrets ' + v.name + '   ') + c.dim('(enrolls TOTP + writes the API keys)'));
     console.log(c.dim('  Wait ~1 min first (Key Vault role propagation), then set-secrets. Do NOT re-run up --go'));
