@@ -55,6 +55,12 @@ runcmd:
   - git config --system --add safe.directory /home/__ADMIN_USER__/agent-fleet-iac
   - 'cd /home/__ADMIN_USER__/aegis && npm install --omit=dev --no-audit --no-fund 2>&1 | tail -5 | tee -a /var/log/aegis-provision.log'
   - printf 'KEY_VAULT_NAME=%s\nMSI_CLIENT_ID=%s\nFLEET_IAC_ROOT=%s\n' '__KEY_VAULT_NAME__' '__MSI_CLIENT_ID__' '/home/__ADMIN_USER__/agent-fleet-iac' > /home/__ADMIN_USER__/aegis/.provision-flags
+  # The LIVE policy is an untracked copy of the repo default: attested changes land here (and in
+  # the ledger), never in the git checkout -- so `aegis update` (a fast-forward pull) can never
+  # collide with a change the plane itself made. Seeded once; a rebuild inherits the repo default
+  # and the ledger, not the values (values are re-attested, which is what a rebuild should force).
+  - 'test -f /home/__ADMIN_USER__/aegis/aegis.policy.jsonc || cp /home/__ADMIN_USER__/agent-fleet-iac/provision/aegis.policy.jsonc /home/__ADMIN_USER__/aegis/aegis.policy.jsonc'
+  - chmod 0600 /home/__ADMIN_USER__/aegis/aegis.policy.jsonc
   # An EMPTY registry, so the service can exist before its first agent is enrolled.
   # aegis.js exits on a missing aegis.config.json -- right for an operator at a terminal,
   # a crash loop under systemd (found on the first live boot: 150 s of ExecStartPre per
@@ -120,6 +126,8 @@ runcmd:
     Environment=AEGIS_BIND=127.0.0.1
     Environment=AEGIS_PORT=7070
     Environment=FLEET_IAC_ROOT=/home/__ADMIN_USER__/agent-fleet-iac
+    # live policy file (untracked); fleetctl's resolver and aegis.js both honour it
+    Environment=AEGIS_POLICY=/home/__ADMIN_USER__/aegis/aegis.policy.jsonc
     Environment=AZURE_CLIENT_ID=__MSI_CLIENT_ID__
     # The control plane's own identity IS the deployer on this host: agent vaults grant
     # Key Vault Secrets Officer to this object id so `fleetctl set-secrets` can seed them.
