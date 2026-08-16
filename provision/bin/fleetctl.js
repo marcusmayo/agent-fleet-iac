@@ -27,6 +27,7 @@ Usage:
   fleetctl aegis    update <contract> [--go --attest "<sentence>"]
   fleetctl enroll   <agent> [--go --attest "<sentence>"] [--domain=<d>] [--plane=<label>] [--aegis-config <path>]
   fleetctl migrate  <from> <to> [--scope=knowledge,claude,...] [--blob=<snapshot>] [--overwrite] [--go --attest "<sentence>"]
+  fleetctl resize   <contract> --size=<Standard_...> [--go --attest "<sentence>"]
   fleetctl restore  <agent> [--blob <name>]
   fleetctl --help
 
@@ -87,6 +88,10 @@ Commands:
             snapshot  force a push now (az vm run-command; VM must be running).
             Decommission --go banks a final snapshot as surface 0 automatically.
 
+  resize    Change an agent VM's size in place (name, region, identity, front door, volumes and
+            chains all unchanged): capacity-gated, attested, deallocate->resize->start->read back,
+            records vmSize in the contract so a rebuild deploys the size the agent runs
+            (provision/lib/resize.js). A region move is decommission + up + restore, not a resize.
   migrate   Move an agent's durable data to another agent, mediated by the control plane:
             fresh snapshot of <from>, copied unchanged into <to>'s backup container, and
             <to> extracts ONLY the scoped volumes with the profile prefix translated, using
@@ -155,6 +160,12 @@ async function main(argv) {
   if (cmd === 'plan') {
     if (!file) { console.error(c.red('plan: missing <contract.agent.jsonc>')); return 2; }
     return runPlan(file, { requireWhatif: flags.has('--require-whatif') });
+  }
+  if (cmd === 'resize') {
+    if (!file) { console.error(c.red('resize: missing <contract>')); return 2; }
+    const { runResize } = require('../lib/resize');
+    const ai = args.indexOf('--attest');
+    return runResize(file, { go: flags.has('--go'), attest: ai > -1 ? args[ai + 1] : '', size: opts.size });
   }
   if (cmd === 'migrate') {
     const to = args.slice(1).filter((a) => !a.startsWith('--'))[1];

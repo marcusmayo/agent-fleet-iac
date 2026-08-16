@@ -118,6 +118,7 @@ function deployEnv(v, pubkey, tunnelToken) {
     SSH_PUBKEY: pubkey,
     SSH_CIDR: v.sshCidr || '',
     AZ_LOCATION: v.region,
+    VM_SIZE: derive(v).azure.vmSize,   // contract, else $VM_SIZE, else the template default -- what plan + capacity checked
     REPO_URL: v.repoUrl,          // always the resolved value — never ''
     REPO_REF: v.repoRef || '',    // '' equals the bicepparam default (HEAD)
   };

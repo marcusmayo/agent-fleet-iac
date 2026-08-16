@@ -31,10 +31,11 @@ const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])
 const CIDR_RE = /^(\d{1,3}\.){3}\d{1,3}\/([0-9]|[12][0-9]|3[0-2])$/;
 const HTTPS_GIT_RE = /^https:\/\/\S+\.git$/;
 const REGION_RE = /^[a-z]+[a-z0-9]*$/;
+const VMSIZE_RE = /^Standard_[A-Za-z0-9_]{2,40}$/;
 
 const ALLOWED_KEYS = new Set([
   'contract', 'name', 'profile', 'domain',
-  'webchatPort', 'region', 'sshCidr', 'repoUrl', 'repoRef', 'operatorEmail',
+  'webchatPort', 'region', 'vmSize', 'sshCidr', 'repoUrl', 'repoRef', 'operatorEmail',
 ]);
 
 // Keys that smell like a secret or key material must never live in the (committed)
@@ -114,6 +115,17 @@ function validateContract(raw) {
     }
   }
 
+  // vmSize (optional; "" or omitted -> $VM_SIZE, else the template default). Recorded by
+  // `fleetctl resize` so a rebuild deploys at the size the agent actually runs.
+  let vmSize = '';
+  if ('vmSize' in raw && raw.vmSize !== '') {
+    if (typeof raw.vmSize !== 'string' || !VMSIZE_RE.test(raw.vmSize)) {
+      errors.push(`"vmSize" must be an Azure VM size like "Standard_B2als_v2" (got ${JSON.stringify(raw.vmSize)})`);
+    } else {
+      vmSize = raw.vmSize;
+    }
+  }
+
   // sshCidr (optional; "" = hardened, no public IP)
   let sshCidr = '';
   if ('sshCidr' in raw) {
@@ -168,6 +180,7 @@ function validateContract(raw) {
     domain,
     webchatPort,
     region,
+    vmSize,
     sshCidr,
     repoUrl,
     repoUrlIsDefault,

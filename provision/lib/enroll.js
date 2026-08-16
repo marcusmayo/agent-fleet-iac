@@ -132,8 +132,14 @@ async function runEnroll(agent, opts = {}) {
 
   const action = decideAction(R.token, R.entry);
   if (action === 'noop') {
-    led({ phrase: opts.attest, clientId: R.token.client_id, outcome: 'ok (no-op: enrolled)' });
-    console.log(col.green('\nalready enrolled — no-op, ledgered.'));
+    // Token and registry agree -- but the agent's Access APP may be new (re-provisioned under the
+    // same name), and a policy lives on the app. Upsert is idempotent by name: on an unchanged app
+    // it is 'updated' with the same content, on a new app it is the attachment that was missing.
+    let pol = 'skipped';
+    try { pol = await cf.upsertServiceAuthPolicy(R.accountId, R.app.id, R.tokenName, R.token.id, R.cfToken); }
+    catch (e) { led({ phrase: opts.attest, clientId: R.token.client_id, outcome: 'failed: policy re-attach: ' + e.message }); console.log(col.red('\nenroll FAILED (ledgered): Service Auth policy re-attach: ' + e.message)); return 1; }
+    led({ phrase: opts.attest, clientId: R.token.client_id, policy: pol, outcome: 'ok (no-op: enrolled; policy ' + pol + ')' });
+    console.log(col.green('\nalready enrolled — token + registry unchanged, Service Auth policy ' + pol + ' on the app; ledgered.'));
     return 0;
   }
   let creds;
