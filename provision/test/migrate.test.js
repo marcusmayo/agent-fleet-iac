@@ -67,7 +67,8 @@ test('target script: add-only by default (skip existing + report), --overwrite o
   assert.match(ow, /--overwrite/); assert.ok(!/--skip-old-files/.test(ow)); assert.match(ow, /echo "mode: overwrite"/);
 });
 test('grant lane: three verbs now, still no Owner / User Access Administrator; backups sentence', () => {
-  assert.deepStrictEqual(Object.keys(VERBS).sort(), ['backups', 'contributor', 'vault']);
+  assert.deepStrictEqual(Object.keys(VERBS).sort(), ['backups', 'contributor', 'locks', 'vault']);
+  assert.strictEqual(grantSentence('aegis', 'locks', { fleetVaultName: 'kv-keelpm-aegis' }), 'I approve granting the control plane aegis lock management on the subscription');
   for (const v of Object.values(VERBS)) assert.ok(!/Owner|User Access Administrator/.test(v.role), v.role);
   assert.strictEqual(grantSentence('aegis', 'backups', { fleetVaultName: 'kv-keelpm-aegis' }), 'I approve granting the control plane aegis read and write on the fleet backup store');
 });
