@@ -26,11 +26,15 @@ runcmd:
   # scaffold/. Detect and use the right dir (safe no-op for keel — no scaffold/).
   - 'if [ -d "/home/__ADMIN_USER__/agent/scaffold" ]; then AGENT_DIR="/home/__ADMIN_USER__/agent/scaffold"; else AGENT_DIR="/home/__ADMIN_USER__/agent"; fi; echo "agent dir: $AGENT_DIR"'
   - printf 'AGENT_PROFILE=%s\nKEY_VAULT_NAME=%s\nMSI_CLIENT_ID=%s\nAGENT_NAME=%s\nBACKUP_ACCOUNT=%s\n' '__AGENT_PROFILE__' '__KEY_VAULT_NAME__' '__MSI_CLIENT_ID__' '__AGENT_NAME__' '__BACKUP_ACCOUNT__' > "$AGENT_DIR/.provision-flags"
-  # Brand this agent with its deploy-time name. The shared webchat reads agent_name
-  # from system/agent.yaml; overwrite the repo default with __AGENT_NAME__, then
-  # verify loudly (fail the build rather than ship a mis-branded agent).
-  - 'sed -i "s/^agent_name:.*/agent_name: \"__AGENT_NAME__\"/" "$AGENT_DIR/system/agent.yaml"'
-  - 'grep -qx "agent_name: \"__AGENT_NAME__\"" "$AGENT_DIR/system/agent.yaml" || { echo "ABORT: agent_name not branded to __AGENT_NAME__" | tee -a /var/log/agent-image-build.log; exit 1; }'
+  # Brand this agent with its deploy-time name -- as an UNTRACKED overlay, system/agent.local.yaml
+  # (gitignored in every agent repo, copied into the image with system/). Every reader of the name
+  # (webchat brand, conversational identity: fleet-core auth.readAgentName) takes the overlay first
+  # and the tracked agent.yaml's profile default second. It used to be a sed on the tracked file,
+  # which left every provisioned checkout permanently dirty and made a git pull that touched
+  # agent.yaml conflict -- the self-heal's fast-forward and any rebuild pull could not land such
+  # a change. Verify loudly (fail the build rather than ship a mis-branded agent).
+  - 'printf "# written by cloud-init at provision -- the deploy-time name; the tracked agent.yaml keeps the profile default\nagent_name: \"__AGENT_NAME__\"\n" > "$AGENT_DIR/system/agent.local.yaml"'
+  - 'grep -qx "agent_name: \"__AGENT_NAME__\"" "$AGENT_DIR/system/agent.local.yaml" || { echo "ABORT: agent_name overlay not written for __AGENT_NAME__" | tee -a /var/log/agent-image-build.log; exit 1; }'
   # chown BEFORE the build so the tree is admin-owned even if the build fails, and
   # invoke the builder via bash so a missing +x bit on build-image.sh cannot
   # Permission-deny and abort the whole runcmd (set -e). build-image.sh writes no
