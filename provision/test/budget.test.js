@@ -30,9 +30,20 @@ test('checkBudget WARNS on null spend', () => {
   assert.strictEqual(r.warn, true);
 });
 
-test('readBudgetSpend degrades gracefully when az is unavailable (sandbox)', () => {
-  // No az on PATH here -> not found / non-zero; must return { ok:false } not throw.
-  const s = budget.readBudgetSpend('fleet-monthly');
+test('readBudgetSpend degrades gracefully when az is unavailable', () => {
+  // Make az unavailable for this call rather than assuming the machine has none: on an
+  // operator's workstation az IS present, read the real budget, and this test failed the
+  // first time the suite ran there. An empty PATH gives the same "not found" everywhere
+  // (on win32 the shell itself is found through ComSpec, not PATH). Must return { ok:false }
+  // with a reason, never throw.
+  const os = require('node:os'), fs = require('node:fs'), path = require('node:path');
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'no-az-'));
+  const key = Object.keys(process.env).find((k) => k.toLowerCase() === 'path') || 'PATH';
+  const saved = process.env[key];
+  process.env[key] = empty;
+  let s;
+  try { s = budget.readBudgetSpend('fleet-monthly'); }
+  finally { process.env[key] = saved; fs.rmSync(empty, { recursive: true, force: true }); }
   assert.strictEqual(s.ok, false);
   assert.ok(typeof s.reason === 'string' && s.reason.length > 0);
 });

@@ -28,8 +28,8 @@ function resolvePolicyPath(explicit) {
   return null;
 }
 
-function loadPolicy(explicit) {
-  const p = resolvePolicyPath(explicit);
+function loadPolicy(explicit, resolve = resolvePolicyPath) {
+  const p = resolve(explicit);
   if (!p) return { ...DEFAULTS, source: '(built-in defaults)' };
   let raw;
   try { raw = JSON.parse(stripJsonc(fs.readFileSync(p, 'utf8'))); }

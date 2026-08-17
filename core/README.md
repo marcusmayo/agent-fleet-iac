@@ -17,7 +17,7 @@ plus an in-build `verify-core.sh` guarantee a vendored copy can never silently d
       model-routing.js      tier resolver + slug selection + gateway-config gen
       capability.js         capability-registry reader (requireCapability)
       audit-log.js  health-check.js  notify.js  redact.js  redaction-gate.js  scan-tree.js
-    manifest.sha256       SHA256 of each scripts-dest module (drift gate)
+    manifest.sha256       SHA256 of each scripts-dest module (drift gate) -- GENERATED, never hand-edited
     gate/                 modules that vendor into each agent's gate/ dir (egress / Can't-Shouldn't)
       ask.js  audit.js  gate.js  redact.js  tripwire.js
       manifest.sha256       SHA256 of each gate-dest module
@@ -29,16 +29,21 @@ plus an in-build `verify-core.sh` guarantee a vendored copy can never silently d
 
 Change a shared module **only in core/ here**, then propagate:
 
-    # 1. refresh the affected manifest:
-    ( cd core && sha256sum *.js ) > core/manifest.sha256
-    ( cd core/gate && sha256sum *.js ) > core/gate/manifest.sha256
-    git add core/<changed> && git commit -m "core: <what>" && git push
+    # 1. regenerate the manifests (they are derived from core/, never edited by hand):
+    ( cd provision && npm run manifest )      # or: core/sync-core.sh regenerates them itself
+    ( cd provision && npm test )              # fails while core/ and a manifest disagree
+    git add core/<changed> core/manifest.sha256 core/gate/manifest.sha256 && git commit -m "core: <what>" && git push
 
     # 2. sync into each agent repo (from an agent-fleet-iac checkout):
     ./core/sync-core.sh ~/castor                    scaffold/scripts scaffold/gate
     ./core/sync-core.sh ~/keel-portfolio-management scripts          gate
 
+    #    (sync-core REFUSES to vendor from a stale manifest -- it regenerates it and asks for the commit first,
+    #     so a stamp always names a commit whose manifest is true)
+
     # 3. in each agent repo: commit the vendored files + .fleet-core-version, rebuild --no-cache.
+    #    Every file sync-core touched must be committed -- a stamp whose manifest names a module the
+    #    commit left behind fails the next image build (this is how a fresh VM once sat at 502).
 
 ## Build-time verification (in each agent Dockerfile)
 
