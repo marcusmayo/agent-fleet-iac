@@ -29,6 +29,36 @@ function probe(host, clientId, clientSecret) {
   });
 }
 
+// What the VM itself says when the probe is not 200: cloud-init state, the build log's verdict,
+// the retry log, the timers, the marker and the containers -- the read that took a hand-written
+// run-command block twice on the day a fresh agent sat at 502. Runs through the guest agent
+// (no network path, no SSH), the way every hardened-VM read already works. Pure builder; the
+// script is exported for tests and travels as a file, so nothing here meets a shell parser.
+function logsScript() {
+  return [
+    '#!/bin/bash',
+    'set +e',
+    'echo === cloud-init ===', 'cloud-init status 2>/dev/null | head -n 2',
+    'echo === image build: verdict ===', 'grep -n -e BUILT -e "VERIFY FAIL" -e "verify-core OK" -e "BUILD FAILED" -e "returned a non-zero code" /var/log/agent-image-build.log 2>/dev/null | tail -n 6',
+    'echo === retry log ===', 'grep -E "bootstrap retry|deferring|healthy|giving up|rebuilding|image build FAILED" /var/log/agent-bootstrap.log 2>/dev/null | tail -n 8',
+    'echo === bootstrap: last lines ===', 'tail -n 6 /var/log/agent-bootstrap.log 2>/dev/null',
+    'echo === timers ===', 'for u in agent-bootstrap-retry.timer agent-backup.timer agent-intake.timer; do printf "%s: " "$u"; systemctl is-active "$u" 2>/dev/null; done',
+    'echo === first-boot marker ===', 'if test -f /run/agent-firstboot; then echo "present (first boot still running or stalled)"; else echo absent; fi',
+    'echo === containers ===', 'docker ps -a --format "{{.Names}} {{.Status}}" 2>/dev/null',
+    'echo === cloudflared ===', 'systemctl is-active cloudflared 2>/dev/null',
+    '',
+  ].join('\n');
+}
+
+function readVmLogs(d, name) {
+  const { runOnVm, stdoutOf } = require('./vmrun');
+  const r = runOnVm(d.azure.resourceGroup, d.azure.vmName, logsScript(), 'checklogs');
+  if (!r.ok) { console.log(c.red('  --logs: run-command failed: ' + r.err)); console.log(c.dim('  (VM off? az not logged in? the RG gone?)')); return; }
+  const body = stdoutOf(r.msg).trim();
+  console.log(c.dim('  --logs: what ' + d.azure.vmName + ' says for itself:'));
+  for (const line of body.split('\n')) console.log('    ' + line);
+}
+
 async function runCheckLive(file, opts = {}) {
   console.log(c.cyan(`check --live  ${file}`));
   const res = loadContract(file);
@@ -62,6 +92,7 @@ async function runCheckLive(file, opts = {}) {
   if (!r.ok) {
     console.log(c.red(`\nlive probe FAILED: ${r.error}`));
     console.log(c.dim('  Is the VM running (az vm start)? tunnel up? token valid?'));
+    if (opts.logs) readVmLogs(d, v.name);
     return 1;
   }
   if (r.status === 200) {
@@ -73,7 +104,9 @@ async function runCheckLive(file, opts = {}) {
   if (r.status === 502 || r.status === 530) console.log(c.dim(`  ${r.status} = tunnel reachable, webchat not answering yet — still building or waiting for its seed; re-run in a few minutes.`));
   const snippet = r.body.replace(/\s+/g, ' ').trim();
   if (snippet) console.log(c.dim('  body: ' + snippet));
+  if (opts.logs) readVmLogs(d, v.name);
+  else console.log(c.dim('  add --logs to read the VM (cloud-init, build verdict, retry log, timers, containers) through run-command'));
   return 1;
 }
 
-module.exports = { runCheckLive };
+module.exports = { runCheckLive, logsScript };

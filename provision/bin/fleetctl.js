@@ -12,7 +12,7 @@ const { c } = require('../lib/util');
 const HELP = `fleetctl — agent-fleet provisioning
 
 Usage:
-  fleetctl check    <contract.agent.jsonc> [--contract-only] [--live] [--aegis-config <path>]
+  fleetctl check    <contract.agent.jsonc> [--contract-only] [--live [--logs]] [--aegis-config <path>]
   fleetctl plan     <contract.agent.jsonc> [--require-whatif]
   fleetctl up       <contract.agent.jsonc> [--go] [--aegis-config <path>]
   fleetctl register <contract.agent.jsonc> [--aegis-config <path>]
@@ -39,6 +39,10 @@ Commands:
                               /health/liveliness through the tunnel (HTTP 200) using
                               the service token stored in aegis.config.json.
             --require-live    exit non-zero if the live probe can't run (for CI).
+            --logs            with --live: when the probe is not 200, read the VM itself
+                              through run-command (cloud-init state, image-build verdict,
+                              retry log, timers, first-boot marker, containers) and print it,
+                              so the CLI says why, not just what.
 
   plan      Validate the contract and preview every Azure + Cloudflare + register
             resource it will create, then run \`az deployment sub what-if\` (read-only).
@@ -158,7 +162,7 @@ async function main(argv) {
 
   if (cmd === 'check') {
     if (!file) { console.error(c.red('check: missing <contract.agent.jsonc>')); return 2; }
-    if (flags.has('--live')) return runCheckLive(file, { aegisConfig, requireLive: flags.has('--require-live') });
+    if (flags.has('--live')) return runCheckLive(file, { aegisConfig, requireLive: flags.has('--require-live'), logs: flags.has('--logs') });
     return runCheck(file, { contractOnly: flags.has('--contract-only') });
   }
   if (cmd === 'plan') {
