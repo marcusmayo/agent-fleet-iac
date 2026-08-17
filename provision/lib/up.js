@@ -89,11 +89,13 @@ function printPlan(v, R) {
 
   console.log(c.bold('\n5. Deploy the VM') + c.red('  — BILLABLE') + c.dim('  (scripts/deploy.sh)'));
   console.log(`     bash scripts/deploy.sh ${v.profile} ${v.name}   ${c.dim('(env: CF_TUNNEL_TOKEN, SSH_PUBKEY, SSH_CIDR, REPO_*)')}`);
-  console.log(c.dim(`     -> az deployment sub create -> ${d.azure.resourceGroup} + ${d.azure.vmName}${v.profile === 'castor' ? ' + vault/identity/backup' : ''}`));
+  console.log(c.dim(`     -> az deployment sub create -> ${d.azure.resourceGroup} + ${d.azure.vmName} + vault/identity${v.profile === 'castor' ? '/backup-account' : ''}`));
+  console.log(c.dim('     then ensures: backup container + MSI role in the fleet store · reads back: vault roles (agent identity, deployer)'));
 
   console.log(c.bold('\nAfter up') + c.dim('  (cloud-init builds + brands ~4-8 min, then WAITS for its vault seed):'));
   console.log(c.dim(`     fleetctl set-secrets ${v.name}                                 (seed vault; VM self-configures, no SSH)`));
-  console.log(c.dim(`     fleetctl check agents/${v.name}.agent.jsonc --live                    (expect HTTP 200)`));
+  console.log(c.dim(`     fleetctl check agents/${v.name}.agent.jsonc --live                    (200 = healthy · 502/530 = still building or waiting for its seed)`));
+  console.log(c.dim('     Panel → Provisioning → Enroll an existing agent                    (adopt it into the hosted control plane)'));
 
   const gate = policy.checkProvision(R.pol, { currentFleet: R.fleet, names: [v.name], region: v.region });
   const regionOk = Array.isArray(R.pol.allowedRegions) && R.pol.allowedRegions.includes(v.region);
@@ -305,10 +307,10 @@ async function runUp(file, opts = {}) {
     try { require('./secrets').ensureVaultRoles(v.name, deployerObjectId() || ''); }
     catch (e) { console.log(c.yellow('  vault roles: check failed (non-fatal): ' + e.message)); }
     console.log(c.bold('  NEXT (within ~10 min): seed the vault so it comes up on its own →'));
-    console.log(c.bold('    fleetctl set-secrets ' + v.name + '   ') + c.dim('(enrolls TOTP + writes the API keys)'));
-    console.log(c.dim('  Wait ~1 min first (Key Vault role propagation), then set-secrets. Do NOT re-run up --go'));
-    console.log(c.dim('  (RG-exists guard aborts) and do NOT ssh+bootstrap (old flow). Then: fleetctl check ' + file + ' --live'));
-    console.log(c.dim('Aegis reads aegis.config.json at startup — restart it (node aegis.js) to show the new agent.'));
+    console.log(c.bold('    fleetctl set-secrets ' + v.name + '   ') + c.dim('(writes the API keys to its vault; edge-only auth, nothing else to enroll)'));
+    console.log(c.dim('  Wait ~1 min first (Key Vault role propagation). Do NOT re-run up --go (the RG-exists guard aborts).'));
+    console.log(c.dim('  Then: fleetctl check ' + file + ' --live   (200 = healthy · 502/530 = still building or waiting for its seed)'));
+    console.log(c.dim('  Then adopt it into the hosted control plane: Panel → Provisioning → Enroll an existing agent.'));
     return 0;
   } catch (e) {
     const msg = (e && e.message) ? e.message : String(e);

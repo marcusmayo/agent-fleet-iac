@@ -70,6 +70,7 @@ async function runCheckLive(file, opts = {}) {
   }
   console.log(c.red(`\ncheck --live: HTTP ${r.status} (expected 200).`));
   if (r.status === 403) console.log(c.dim('  403 = Cloudflare Access rejected the token — verify the Service Auth policy and token validity.'));
+  if (r.status === 502 || r.status === 530) console.log(c.dim(`  ${r.status} = tunnel reachable, webchat not answering yet — still building or waiting for its seed; re-run in a few minutes.`));
   const snippet = r.body.replace(/\s+/g, ' ').trim();
   if (snippet) console.log(c.dim('  body: ' + snippet));
   return 1;
