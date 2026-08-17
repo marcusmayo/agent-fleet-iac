@@ -12,7 +12,7 @@
 //   5 service token  6 DNS  7 tunnel  : now unreferenced / connector dead.
 
 const fs = require('node:fs');
-const { c, runCapture } = require('./util');
+const { c, runCapture, findFleetRoot } = require('./util');
 const { loadContract } = require('./contract');
 const { derive } = require('./derive');
 const cf = require('./cfapi');
@@ -20,6 +20,24 @@ const cfg = require('./aegisconfig');
 const { runDeregister } = require('./register');
 
 const env = (n) => (process.env[n] || '').trim();
+
+// Which registry does this plane hold, and is the agent in it? Resolved exactly as up/register/
+// deregister/enroll resolve it (explicit flag, $AEGIS_CONFIG, $AEGIS_DIR, the aegis checkout beside
+// the fleet root). This lane once read only the flag and the env var, found nothing on a workstation
+// that had neither, printed "not registered", skipped the surface and said complete while the
+// registry still held the agent. Unresolvable is its own state, reported and counted as a failed
+// surface -- never "not registered". Pure read; exported for tests.
+// -> { aegisPath, aegisResolved, aegis, aegisError? }
+function registryState(aegisConfig, name) {
+  const reg = cfg.resolveConfigPath(aegisConfig, findFleetRoot());
+  const out = { aegisPath: reg.path, aegisResolved: !!(reg.path && reg.exists), aegis: false };
+  if (!out.aegisResolved) return out;
+  try {
+    const conf = cfg.load(reg.path);
+    out.aegis = (conf.agents || []).some((a) => a && a.name === name);
+  } catch (e) { out.aegisResolved = false; out.aegisError = e.message; }
+  return out;
+}
 
 async function discover(file, d, accountId, cfToken, aegisConfig) {
   const name = d.register.name;
@@ -88,10 +106,7 @@ async function discover(file, d, accountId, cfToken, aegisConfig) {
     if (gone) s.deletedVault = { name: gone.name, location: (gone.properties && gone.properties.location) || gone.location || '' };
   } catch { /* unreadable -> not listed; RG delete still proceeds */ }
 
-  try {
-    const conf = aegisConfig && fs.existsSync(aegisConfig) ? cfg.load(aegisConfig) : null;
-    s.aegis = !!(conf && (conf.agents || []).some((a) => a.name === name));
-  } catch { s.aegis = false; }
+  Object.assign(s, registryState(aegisConfig, name));
 
   s.localFile = fs.existsSync(file) ? file : null;
   return s;
@@ -109,7 +124,9 @@ function printPlan(s) {
     console.log('  !  RG lock              ' + (ours ? c.yellow(l.name + ' (' + l.level + ') — orphan of a failed unprotect sync; --go removes it before the RG delete') : c.red(l.name + ' (' + l.level + ') — NOT the fleet mirror; the RG delete will be refused until it is removed by whoever set it')));
   }
   console.log(c.bold(`\nTeardown plan for "${s.name}"  (surfaces present are DELETE; absent are skipped)`));
-  console.log(`  1 Aegis registry     ${s.aegis ? c.yellow('DEREGISTER') : c.dim('not registered')}`);
+  console.log(`  1 Aegis registry     ${s.aegisResolved
+    ? (s.aegis ? c.yellow('DEREGISTER') + c.dim('  ' + s.aegisPath) : c.dim('not registered  ' + s.aegisPath))
+    : c.red('UNRESOLVED') + c.dim('  no aegis.config.json (' + (s.aegisError || 'set $AEGIS_CONFIG or pass --aegis-config') + ') -- counts as a failed surface at --go')}`);
   console.log(`  2 local config       ${s.localFile ? del(s.localFile) : gone()}`);
   console.log(`  3 Azure RG           ${s.rg ? del(s.rgName) : gone(s.rgName)}`);
   console.log(`  4 CF Access app      ${s.app ? del(s.app.id) : gone()}`);
@@ -132,8 +149,9 @@ async function execute(file, d, accountId, cfToken, aegisConfig, s) {
   const fail = (m, e) => { failures.push(m); console.log(c.red(`  ✗ ${m}: ${e && e.message ? e.message : e}`)); };
 
   // 1. Aegis registry (local, safe first — reuses deregister; file still on disk here)
-  if (s.aegis) { try { runDeregister(file, { aegisConfig }); ok('Aegis: deregistered'); } catch (e) { fail('Aegis deregister', e); } }
-  else skip('Aegis registry');
+  if (!s.aegisResolved) fail('Aegis registry', new Error('no aegis.config.json resolved -- set $AEGIS_CONFIG or pass --aegis-config, then re-run to deregister'));
+  else if (s.aegis) { try { runDeregister(file, { aegisConfig: s.aegisPath }); ok('Aegis: deregistered from ' + s.aegisPath); } catch (e) { fail('Aegis deregister', e); } }
+  else skip('Aegis registry (' + s.aegisPath + ')');
 
   // 2. local contract file
   if (s.localFile) { try { fs.unlinkSync(s.localFile); ok(`local config: deleted ${s.localFile}`); } catch (e) { fail('local config delete', e); } }
@@ -280,4 +298,4 @@ async function runDecommission(file, opts = {}) {
   return 0;
 }
 
-module.exports = { runDecommission, discover, printPlan };
+module.exports = { runDecommission, discover, printPlan, registryState };
