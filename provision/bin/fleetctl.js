@@ -53,6 +53,10 @@ Commands:
                    Aborts if rg-<name> already exists (cloud-init is immutable on a
                    live VM) — decommission first for a rebuild, or pass --update for
                    an intentional in-place update that does not change cloud-init.
+                   Plan and --go both run the repo gate: the agent repo at the contract's
+                   ref is cloned and its vendored fleet-core hashed against its stamps, the
+                   same check the image build runs; --go refuses a repo that would fail it
+                   (provision/lib/repogate.js).
 
   register  Add/update the agent's entry in aegis.config.json (idempotent per name;
             refuses if that file is not gitignored). Service-token credentials come

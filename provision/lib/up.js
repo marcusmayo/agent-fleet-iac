@@ -12,6 +12,7 @@ const cfg = require('./aegisconfig');
 const policy = require('./policy');
 const budget = require('./budget');
 const { checkCapacity } = require('./capacity');
+const { checkRepoGate } = require('./repogate');
 const { runRegister } = require('./register');
 const backup = require('./backup');
 
@@ -51,6 +52,11 @@ function gather(v, opts) {
     // Azure capacity: offered SKU + family/regional quota headroom, read here so a refusal
     // happens in plan and names the quota to request (see capacity.js; found on the aegis lane).
     capacity: checkCapacity(v.region, d.azure.vmSize),
+    // Repo gate: would the agent repo at the contract's ref pass its own drift check? The image
+    // build runs verify-core.sh inside the VM, where this lane cannot see it; a stamp that
+    // disagreed with its files once left a fresh agent at 502 with `up` reporting success. Read
+    // in plan, refused at --go (see repogate.js).
+    repoGate: checkRepoGate({ repoUrl: d.azure.repoUrl, ref: v.repoRef || '' }),
     cfToken: process.env.CF_API_TOKEN || '',
     accountId: process.env.CF_ACCOUNT_ID || '',
     operatorEmail: (v.operatorEmail || process.env.CF_OPERATOR_EMAIL || '').trim(),   // contract field wins (per-agent)
@@ -106,6 +112,7 @@ function printPlan(v, R) {
   console.log(`  gate            ${gate.ok ? c.green('PASS') : c.red('BLOCK — ' + gate.errors.join('; '))}`);
   console.log(`  capacity        ${R.capacity.ok ? c.green('PASS') : c.red('FAIL')} ${c.dim(d.azure.vmSize + ' in ' + v.region + ' — ' + R.capacity.detail)}`);
   if (!R.capacity.ok && R.capacity.request) console.log(c.dim('                  request: ') + R.capacity.request);
+  console.log(`  repo gate       ${R.repoGate.ok ? c.green('PASS') : c.red('FAIL')} ${c.dim(R.repoGate.detail)}`);
   console.log(c.dim(`  policy          ${R.pol.source}`));
 }
 
@@ -214,6 +221,15 @@ async function runUp(file, opts = {}) {
   if (!R.capacity.ok) {
     console.log(c.red('\nup --go ABORT (nothing created) — capacity: ' + R.capacity.detail));
     if (R.capacity.request) console.log('  request it: ' + R.capacity.request);
+    return 2;
+  }
+
+  // Repo gate: the image build would fail inside the VM -- refuse here, before anything is created.
+  if (!R.repoGate.ok) {
+    console.log(c.red('\nup --go ABORT (nothing created) — repo gate: ' + R.repoGate.detail));
+    console.log(c.dim('  The agent image runs verify-core.sh at build time and would die on this. Re-sync fleet-core into the'));
+    console.log(c.dim('  agent repo (core/sync-core.sh regenerates the manifest and refuses a stale one), commit every file it'));
+    console.log(c.dim('  lists, push, then re-run up.'));
     return 2;
   }
 
