@@ -77,6 +77,14 @@ async function findServiceTokenByName(accountId, name, apiToken) {
   return (toks || []).find((t) => t.name === name) || null;
 }
 
+async function listServiceTokens(accountId, apiToken) {
+  return (await cfExec(reqListServiceTokens(accountId), apiToken)) || [];
+}
+
+async function listAppPolicies(accountId, appId, apiToken) {
+  return (await cfExec(reqListPolicies(accountId, appId), apiToken)) || [];
+}
+
 async function deleteServiceToken(accountId, id, apiToken) {
   await cfExec(reqDeleteServiceToken(accountId, id), apiToken);
 }
@@ -163,7 +171,7 @@ module.exports = {
   reqListApps, reqListPolicies, reqServiceAuthPolicy,
   reqListTunnels, reqDeleteTunnel, reqDeleteTunnelConnections,
   reqListZones, reqListDnsRecords, reqDeleteDnsRecord, reqDeleteApp,
-  cfExec, createServiceToken, findServiceTokenByName, deleteServiceToken, rotateServiceToken,
+  cfExec, createServiceToken, findServiceTokenByName, listServiceTokens, listAppPolicies, deleteServiceToken, rotateServiceToken,
   findAppByHostname, upsertServiceAuthPolicy,
   findTunnelByName, deleteTunnel, findZoneIdByName, findDnsRecordByHostname, deleteDnsRecord, deleteApp,
   listReusablePolicies,

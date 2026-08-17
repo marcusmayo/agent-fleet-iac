@@ -39,6 +39,32 @@ function registryState(aegisConfig, name) {
   return out;
 }
 
+// Every service token that grants access to THIS agent's app is this agent's token, whichever
+// control plane minted it: `up` mints aegis-<name>; each plane's `enroll` mints <plane>-<name>.
+// A teardown that deleted only aegis-<name> left the plane's token behind as a live, unreferenced
+// credential (found on the first enrolled agent decommissioned from a workstation). Selection is
+// exact where it can be -- the tokens the app's own Service Auth policies reference -- and by the
+// <plane>-<name> naming when the app is already gone (a re-run), guarded so a token that belongs
+// to another agent whose name ends the same way is never touched. Pure; exported for tests.
+function selectAgentTokens(tokens, appPolicies, name, otherNames = []) {
+  const byId = new Map((tokens || []).filter((t) => t && t.id).map((t) => [t.id, t]));
+  const out = new Map();
+  for (const t of byId.values()) if (t.name === 'aegis-' + name) out.set(t.id, t);
+  for (const p of appPolicies || []) {
+    for (const inc of (p && p.include) || []) {
+      const id = inc && inc.service_token && inc.service_token.token_id;
+      if (id && byId.has(id)) out.set(id, byId.get(id));
+    }
+  }
+  const suffix = '-' + name;
+  for (const t of byId.values()) {
+    if (typeof t.name !== 'string' || !t.name.endsWith(suffix) || t.name.length === suffix.length) continue;
+    const belongsToLonger = (otherNames || []).some((o) => o && o !== name && o.length > name.length && t.name.endsWith('-' + o));
+    if (!belongsToLonger) out.set(t.id, t);
+  }
+  return [...out.values()];
+}
+
 async function discover(file, d, accountId, cfToken, aegisConfig) {
   const name = d.register.name;
   const fqdn = d.cloudflare.fqdn;
@@ -47,8 +73,14 @@ async function discover(file, d, accountId, cfToken, aegisConfig) {
 
   try {
     s.tunnel = await cf.findTunnelByName(accountId, name, cfToken);
-    s.token = await cf.findServiceTokenByName(accountId, `aegis-${name}`, cfToken);
     s.app = await cf.findAppByHostname(accountId, fqdn, cfToken);
+    // other registered names, so a <plane>-<other> token is never mistaken for one of ours
+    let others = [];
+    try { const reg = cfg.resolveConfigPath(aegisConfig, findFleetRoot()); if (reg.path && reg.exists) others = (cfg.load(reg.path).agents || []).map((a) => a && a.name).filter(Boolean); } catch { others = []; }
+    const allTokens = await cf.listServiceTokens(accountId, cfToken);
+    const appPolicies = s.app ? await cf.listAppPolicies(accountId, s.app.id, cfToken).catch(() => []) : [];
+    s.tokens = selectAgentTokens(allTokens, appPolicies, name, others);
+    s.token = s.tokens.find((t) => t.name === `aegis-${name}`) || null;   // the lane's own token, for the legacy checks
     s.zoneId = await cf.findZoneIdByName(domain, cfToken);
     s.dns = s.zoneId ? await cf.findDnsRecordByHostname(s.zoneId, fqdn, cfToken) : null;
     // Legacy hand-built agents (pre-fleetctl) also carried an ssh-<name> tunnel hostname
@@ -65,7 +97,8 @@ async function discover(file, d, accountId, cfToken, aegisConfig) {
     s.policies = [];
     try {
       const all = await cf.listReusablePolicies(accountId, cfToken);
-      s.policies = (all || []).filter((p) => (s.token && JSON.stringify(p).includes(s.token.id)) || p.name === name + '-operator');
+      const ids = (s.tokens || []).map((t) => t.id);
+      s.policies = (all || []).filter((p) => ids.some((id) => JSON.stringify(p).includes(id)) || p.name === name + '-operator');
     } catch { /* older accounts / perms: skip quietly */ }
   } catch (e) {
     s.cfErr = e.message;
@@ -130,7 +163,7 @@ function printPlan(s) {
   console.log(`  2 local config       ${s.localFile ? del(s.localFile) : gone()}`);
   console.log(`  3 Azure RG           ${s.rg ? del(s.rgName) : gone(s.rgName)}`);
   console.log(`  4 CF Access app      ${s.app ? del(s.app.id) : gone()}`);
-  console.log(`  5 CF service token   ${s.token ? del(s.token.id) : gone('aegis-' + s.name)}`);
+  console.log(`  5 CF service tokens  ${(s.tokens && s.tokens.length) ? del(s.tokens.map((t) => `${t.name} ${t.id}`).join(', ')) : gone('none named aegis-' + s.name + ' / <plane>-' + s.name + ', none referenced by the app')}`);
   console.log(`  6 CF DNS (CNAME)     ${s.dns ? del(s.fqdn) : gone(s.fqdn)}`);
   console.log(`  7 CF tunnel          ${s.tunnel ? del(s.tunnel.id) : gone(s.name)}`);
   if (s.appSsh || s.dnsSsh || (s.policies && s.policies.length)) {
@@ -209,18 +242,20 @@ async function execute(file, d, accountId, cfToken, aegisConfig, s) {
   // just-deleted app's Service-Auth policy hasn't propagated yet -- retry with backoff.
   // A 12139 that survives the retries means a legacy standalone policy/group still
   // references it (hand-built era): remove that reference in the CF dashboard, re-run.
-  if (s.token) {
-    let done = false, lastErr = null;
-    for (let i = 0; i < 3 && !done; i++) {
-      if (i) await new Promise((r) => setTimeout(r, 4000));
-      try {
-        await cf.deleteServiceToken(accountId, s.token.id, cfToken);
-        done = true; ok('CF service token: deleted' + (i ? ` (retry ${i})` : ''));
-      } catch (e) { lastErr = e; }
+  if (s.tokens && s.tokens.length) {
+    for (const t of s.tokens) {
+      let done = false, lastErr = null;
+      for (let i = 0; i < 3 && !done; i++) {
+        if (i) await new Promise((r) => setTimeout(r, 4000));
+        try {
+          await cf.deleteServiceToken(accountId, t.id, cfToken);
+          done = true; ok(`CF service token ${t.name}: deleted` + (i ? ` (retry ${i})` : ''));
+        } catch (e) { lastErr = e; }
+      }
+      if (!done) fail(`CF service token ${t.name} delete (after retries — a legacy policy/group may still reference it; remove it in the CF dashboard, then re-run)`, lastErr);
     }
-    if (!done) fail('CF service token delete (after retries — a legacy policy/group may still reference it; remove it in the CF dashboard, then re-run)', lastErr);
   }
-  else skip('CF service token');
+  else skip('CF service tokens');
 
   // 6. CF DNS CNAME
   if (s.dns && s.zoneId) { try { await cf.deleteDnsRecord(s.zoneId, s.dns.id, cfToken); ok('CF DNS CNAME: deleted'); } catch (e) { fail('CF DNS delete', e); } }
@@ -272,7 +307,7 @@ async function runDecommission(file, opts = {}) {
   const s = await discover(file, d, accountId, cfToken, aegisPath);
   printPlan(s);
 
-  const anything = s.aegis || s.localFile || s.rg || s.app || s.token || s.dns || s.tunnel || s.appSsh || s.dnsSsh || (s.policies && s.policies.length);
+  const anything = s.aegis || s.localFile || s.rg || s.app || (s.tokens && s.tokens.length) || s.dns || s.tunnel || s.appSsh || s.dnsSsh || (s.policies && s.policies.length);
   if (!anything) { console.log(c.green('\nNothing to decommission — every surface is already absent.')); return 0; }
 
   if (!opts.go) {
@@ -298,4 +333,4 @@ async function runDecommission(file, opts = {}) {
   return 0;
 }
 
-module.exports = { runDecommission, discover, printPlan, registryState };
+module.exports = { runDecommission, discover, printPlan, registryState, selectAgentTokens };
