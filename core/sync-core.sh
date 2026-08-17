@@ -59,8 +59,14 @@ vendor() {
   echo "Syncing fleet-core ($CORE_REF) -> $DEST"
   for f in "$SRCDIR"/*.js "$SRCDIR"/*.yaml "$SRCDIR"/fetch-secret.sh "$SRCDIR"/backup-push.sh "$HERE"/verify-core.sh; do
     [ -e "$f" ] || continue
-    cp "$f" "$DEST/$(basename "$f")"
-    echo "  vendored: $(basename "$f")"
+    n="$(basename "$f")"
+    # LF on the way in, whatever the source checkout holds. The manifest hashes LF bytes and the
+    # Docker build hashes what git ships; a Windows checkout of core/ can carry CRLF, and four
+    # vendored copies once landed CRLF in an agent tree -- committed, they would have failed
+    # verify-core on the next build. The vendor step normalises, so no checkout setting can.
+    tr -d '\r' < "$f" > "$DEST/$n"
+    chmod --reference="$f" "$DEST/$n" 2>/dev/null || true
+    echo "  vendored: $n"
   done
   {
     echo "# fleet-core sync stamp -- do not edit by hand"
@@ -70,6 +76,13 @@ vendor() {
     sed 's/^/  /' "$MANIFEST"
   } > "$DEST/.fleet-core-version"
   echo "  stamp: $DEST/.fleet-core-version (core=$CORE_REF)"
+  # The same check the Docker build will run, run here, now, with the vendored copy of the checker
+  # (LF by construction): sync-core never leaves a dest that would fail its own build.
+  if bash "$DEST/verify-core.sh" "$DEST" >/dev/null 2>&1; then
+    echo "  verify-core: OK ($DEST would pass the build)"
+  else
+    echo "FATAL: $DEST would FAIL verify-core -- refusing to leave it that way:"; bash "$DEST/verify-core.sh" "$DEST" 2>&1 | grep -v ': OK$' | sed 's/^/    /'; exit 1
+  fi
 }
 
 vendor "$HERE" "$REPO/$SCRIPTS_SUB" "$HERE/manifest.sha256"
