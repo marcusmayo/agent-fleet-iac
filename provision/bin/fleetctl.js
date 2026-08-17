@@ -26,6 +26,7 @@ Usage:
   fleetctl aegis    grant <contract> vault|contributor|backups [--go --attest "<sentence>"]
   fleetctl aegis    update <contract> [--go --attest "<sentence>"]
   fleetctl enroll   <agent> [--go --attest "<sentence>"] [--domain=<d>] [--plane=<label>] [--aegis-config <path>]
+  fleetctl discover [--json] [--plane=<label>] [--aegis-config <path>]
   fleetctl migrate  <from> <to> [--scope=knowledge,claude,...] [--blob=<snapshot>] [--overwrite] [--go --attest "<sentence>"]
   fleetctl resize   <contract> --size=<Standard_...> [--go --attest "<sentence>"]
   fleetctl restore  <agent> [--blob <name>]
@@ -114,6 +115,11 @@ Commands:
             from the agent RG's tags, the token from Cloudflare, the secret goes straight
             into the (gitignored) registry and is never printed. Attested per agent,
             ledgered, idempotent (see provision/lib/enroll.js).
+  discover  What Azure holds against what THIS plane's registry holds; changes nothing.
+            registered (both), unenrolled (in Azure -- app=agent-fleet tags -- and not
+            in this registry: an enroll away), gone (in this registry, no RG: a
+            registry-only decommission away). Two planes, two registries, one Azure:
+            the read that lets each plane see the other's work. --json for the panel.
   aegis     Provision the CONTROL PLANE (not an agent). Its own contract and lane, so
             fleet caps and decommission cannot reach it. Budget gate applies; maxFleet
             and allowedRegions do not (see provision/lib/aegis-up.js). 'grant' gives its
@@ -181,6 +187,10 @@ async function main(argv) {
     const { runMigrate } = require('../lib/migrate');
     const ai = args.indexOf('--attest');
     return runMigrate(file, to, { go: flags.has('--go'), attest: ai > -1 ? args[ai + 1] : '', scope: opts.scope, blob: opts.blob, overwrite: flags.has('--overwrite') });
+  }
+  if (cmd === 'discover') {
+    const { runDiscover } = require('../lib/discover');
+    return runDiscover({ aegisConfig, json: flags.has('--json'), plane: opts.plane });
   }
   if (cmd === 'enroll') {
     if (!file) { console.error(c.red('enroll: missing <agent>')); return 2; }

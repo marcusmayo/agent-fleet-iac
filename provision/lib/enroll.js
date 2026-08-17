@@ -28,10 +28,7 @@ const { DEFAULT_DOMAIN } = require('./contract');
 
 const NAME_RE = /^[a-z][a-z0-9-]{1,23}$/;
 
-function planeName(explicit) {
-  const raw = (explicit || process.env.AEGIS_PLANE || os.hostname() || 'aegis').toLowerCase();
-  return raw.replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'aegis';
-}
+const { planeName } = require('./plane');   // one rule for every lane that names something after the plane
 function attestSentence(agent, plane) {
   return 'I approve enrolling ' + agent + ' in the control plane ' + plane;
 }

@@ -31,14 +31,14 @@ function derive(v) {
       accessAppHost: fqdn,
       accessPolicy: `${v.name}-operator`,
       ingress: `${fqdn}  ->  http://localhost:${v.webchatPort}`,
-      aegisServiceToken: `aegis-${v.name}  (Service Auth token + policy — created at 'up')`,
+      aegisServiceToken: `<plane>-${v.name}  (Service Auth token + policy — created at 'up', named for the provisioning plane)`,
     },
     register: {
       name: v.name,
       profile: v.profile,
       host: fqdn,
-      clientId: `<aegis-${v.name} Service Auth Client ID — at up>`,
-      clientSecret: `<aegis-${v.name} Service Auth Client Secret — at up>`,
+      clientId: `<<plane>-${v.name} Service Auth Client ID — at up>`,
+      clientSecret: `<<plane>-${v.name} Service Auth Client Secret — at up>`,
     },
   };
 }

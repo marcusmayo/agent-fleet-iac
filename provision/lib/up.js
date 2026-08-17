@@ -13,6 +13,7 @@ const policy = require('./policy');
 const budget = require('./budget');
 const { checkCapacity } = require('./capacity');
 const { checkRepoGate } = require('./repogate');
+const { planeName } = require('./plane');
 const { runRegister } = require('./register');
 const backup = require('./backup');
 
@@ -82,13 +83,13 @@ function printPlan(v, R) {
   console.log(c.dim(`     -> tunnel "${v.name}", DNS ${d.cloudflare.fqdn}, app "${v.name}", policy ${v.name}-operator; tunnel token captured (redacted)`));
 
   console.log(c.bold('\n2. Service token') + c.dim('  (Cloudflare API)'));
-  console.log(`     POST /accounts/{acct}/access/service_tokens   { "name": "aegis-${v.name}" }`);
+  console.log(`     POST /accounts/{acct}/access/service_tokens   { "name": "${planeName(opts.plane)}-${v.name}" }`);
   console.log(c.dim('     -> client_id + client_secret (secret written ONLY to aegis.config.json, never printed)'));
 
   console.log(c.bold('\n3. Service Auth policy') + c.dim('  (Cloudflare API)'));
   console.log(`     find app by domain ${d.cloudflare.fqdn} -> app_id`);
   console.log(`     POST /accounts/{acct}/access/apps/{app_id}/policies`);
-  console.log(`          { "name": "aegis-${v.name}", "decision": "non_identity", "include": [{ "service_token": { "token_id": … } }] }`);
+  console.log(`          { "name": "${planeName(opts.plane)}-${v.name}", "decision": "non_identity", "include": [{ "service_token": { "token_id": … } }] }`);
 
   console.log(c.bold('\n4. Register') + c.dim('  (local, idempotent)'));
   console.log(`     upsert { name: ${v.name}, profile: ${v.profile}, host: ${d.cloudflare.fqdn}, clientId, clientSecret } into aegis.config.json`);
@@ -268,15 +269,20 @@ async function runUp(file, opts = {}) {
     // 2. Service token — idempotent: an existing same-name token is ROTATED (new
     //    secret, same token id) so any policy referencing it stays valid; delete
     //    would be refused with 12139 service_token_in_use once a policy exists.
-    step(2, `Service token aegis-${v.name} (Cloudflare API)`);
-    const existing = await cf.findServiceTokenByName(R.accountId, `aegis-${v.name}`, R.cfToken);
+    //    Named for THIS plane (<plane>-<agent>, the same rule enroll uses): the plane that
+    //    provisions an agent holds a token labelled as itself, so provisioning from the hosted
+    //    plane leaves nothing for enroll to add, and a workstation up is labelled as what it is.
+    //    (It used to be aegis-<agent> from every plane -- indistinguishable in the agent's chain.)
+    const tokenName = `${planeName(opts.plane)}-${v.name}`;
+    step(2, `Service token ${tokenName} (Cloudflare API)`);
+    const existing = await cf.findServiceTokenByName(R.accountId, tokenName, R.cfToken);
     let token;
     if (existing) {
       console.log(c.dim(`  token exists (${existing.id}) — rotating for a fresh usable secret (policy references stay valid)`));
       token = await cf.rotateServiceToken(R.accountId, existing.id, R.cfToken);
       console.log(c.green(`  rotated — clientId ${token.clientId}  (secret held in-memory)`));
     } else {
-      token = await cf.createServiceToken(R.accountId, `aegis-${v.name}`, R.cfToken);
+      token = await cf.createServiceToken(R.accountId, tokenName, R.cfToken);
       console.log(c.green(`  created — clientId ${token.clientId}  (secret held in-memory)`));
     }
 
@@ -284,7 +290,7 @@ async function runUp(file, opts = {}) {
     step(3, 'Service Auth policy on the agent app (Cloudflare API)');
     const app = await cf.findAppByHostname(R.accountId, R.d.cloudflare.fqdn, R.cfToken);
     if (!app) { console.log(c.red(`  app for ${R.d.cloudflare.fqdn} not found — did step 1 create it?`)); return 1; }
-    const action = await cf.upsertServiceAuthPolicy(R.accountId, app.id, `aegis-${v.name}`, token.id, R.cfToken);
+    const action = await cf.upsertServiceAuthPolicy(R.accountId, app.id, tokenName, token.id, R.cfToken);
     console.log(c.green(`  policy ${action} on app ${app.id}`));
 
     // 4. Register (in-process; secret -> gitignored config only)
