@@ -55,3 +55,27 @@ test('turnRecord carries metadata only -- never the prompt or reply', () => {
   assert.strictEqual(bad.actor.id, 'unattributed');
   assert.strictEqual(bad.error.length, 200);
 });
+
+test('turnRecord anchors the content by hash and names the session and turn -- never the words', () => {
+  const crypto = require('node:crypto');
+  const rec = cs.turnRecord({ actor: { src: 'cf-access', id: 'a' } }, { model: 'm', prompt: 'what is in your queue?', reply: 'Your queue is clear.', durationMs: 10, rc: 0, sessionId: 'sess-1', turnIndex: 7 });
+  assert.strictEqual(rec.promptSha256, crypto.createHash('sha256').update('what is in your queue?', 'utf8').digest('hex'));
+  assert.strictEqual(rec.replySha256, crypto.createHash('sha256').update('Your queue is clear.', 'utf8').digest('hex'));
+  assert.strictEqual(rec.promptBytes, 22); assert.strictEqual(rec.replyBytes, 20);
+  assert.strictEqual(rec.sessionId, 'sess-1'); assert.strictEqual(rec.turnIndex, 7);
+  assert.ok(!JSON.stringify(rec).includes('queue'), 'no prompt text'); assert.ok(!JSON.stringify(rec).includes('clear'), 'no reply text');
+  const empty = cs.turnRecord(null, { rc: 0 });
+  assert.strictEqual(empty.promptSha256, null); assert.strictEqual(empty.sessionId, null);
+});
+
+test('nextTurnIndex counts per session and starts at 1; currentSessionId picks the newest route file', () => {
+  const t = fs.mkdtempSync(path.join(os.tmpdir(), 'turnidx-'));
+  assert.strictEqual(cs.nextTurnIndex(t, 's1'), 1); assert.strictEqual(cs.nextTurnIndex(t, 's1'), 2); assert.strictEqual(cs.nextTurnIndex(t, 's2'), 1);
+  cs.writeSessionId(t, 'gw-session', 'gateway', 'openrouter/x');
+  assert.strictEqual(cs.currentSessionId(t, 'openrouter/x'), 'gw-session');
+  const later = Date.now() + 5000;
+  cs.writeSessionId(t, 'direct-session', 'direct', 'openrouter/x');
+  fs.utimesSync(cs.sessionFile ? cs.sessionFile(t, 'direct', 'openrouter/x') : path.join(t, 'chat-session-direct--' + 'openrouter/x'.replace(/[^a-z0-9]+/gi, '_') + '.json'), later / 1000, later / 1000);
+  assert.strictEqual(cs.currentSessionId(t, 'openrouter/x'), 'direct-session');
+  fs.rmSync(t, { recursive: true, force: true });
+});
