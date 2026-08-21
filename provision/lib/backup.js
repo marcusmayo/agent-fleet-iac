@@ -266,6 +266,126 @@ function runBackupList(name) {
   return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Reading the store. Pure parts first so the decisions are testable without az:
+// what a row IS, and what can be DONE with it. An Archive blob cannot be read until
+// it is rehydrated, and the failure mode we refuse to ship is a download that dies
+// with a raw Azure error instead of saying "this is in the back room, here is how
+// long it takes to fetch it".
+
+const SAFE_BLOB = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,1023}$/;
+function safeBlobName(n) { return SAFE_BLOB.test(String(n || '')); }
+
+// az ... -o tsv gives name<TAB>tier<TAB>archiveStatus<TAB>lastModified<TAB>size, with the
+// literal 'None' for nulls. A blob written and never tiered reports no tier at all -- that is
+// Hot, not unknown.
+function blobRows(tsv) {
+  return String(tsv || '').trim().split('\n').filter(Boolean).map((line) => {
+    const [name, tier, archiveStatus, modified, size] = line.split('\t').map((x) => (x || '').trim());
+    const none = (v) => (!v || v === 'None' ? null : v);
+    return { name, tier: none(tier) || 'Hot', archiveStatus: none(archiveStatus), modified: none(modified), size: Number(size) || 0 };
+  }).filter((r) => r.name);
+}
+
+// What a fetch of this blob would do right now.
+function fetchPlan(row) {
+  const r = row || {};
+  if (r.archiveStatus) return { act: 'pending', why: 'rehydration already in progress (' + r.archiveStatus + ') — it lands in the tier it was asked for; try again later' };
+  if (String(r.tier).toLowerCase() === 'archive') {
+    return { act: 'rehydrate', why: 'this blob is in Archive (older than ' + ARCHIVE_DAYS + ' days) and cannot be read until it is rehydrated' };
+  }
+  return { act: 'download', why: null };
+}
+
+// Honest ETAs, not promises: Azure publishes standard rehydration as up to 15 hours and high
+// priority as typically under an hour for objects below 10 GiB. Ledger and record objects are
+// far smaller than that, which is why High is the default here.
+function rehydrateEta(priority) {
+  return String(priority).toLowerCase() === 'standard'
+    ? 'standard priority: up to about 15 hours'
+    : 'high priority: usually under an hour for objects this size';
+}
+
+function runBackupLs(container, opts = {}) {
+  const acct = resolveAccount();
+  if (!acct) { console.log(c.red('backup ls: store absent — run `fleetctl backup init`')); return 2; }
+  const args = ['storage', 'blob', 'list', '--account-name', acct, '-c', container, '--auth-mode', 'login',
+    '--query', '[].[name,properties.blobTier,properties.archiveStatus,properties.lastModified,properties.contentLength]', '-o', 'tsv'];
+  if (opts.prefix) { args.push('--prefix', opts.prefix); }
+  const r = runCapture('az', args);
+  if (!r.ok) { console.log(c.red('backup ls: cannot read ' + container + '/ — ' + (r.stderr || '').split('\n')[0])); return 1; }
+  const rows = blobRows(r.stdout).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  if (!rows.length) { console.log(c.yellow('nothing in ' + container + '/' + (opts.prefix ? opts.prefix : '') + ' yet')); return 0; }
+  for (const b of rows) {
+    const p = fetchPlan(b);
+    const tag = p.act === 'download' ? c.green(b.tier) : p.act === 'pending' ? c.cyan('rehydrating') : c.yellow('Archive');
+    console.log('  ' + tag.padEnd(20) + ' ' + (b.modified || '').slice(0, 19).padEnd(20) + ' ' + String(Math.round(b.size / 1024) + 'K').padStart(8) + '  ' + b.name);
+  }
+  console.log(c.dim(`\n${rows.length} blob(s) in ${container}/${opts.prefix || ''}`));
+  const cold = rows.filter((b) => fetchPlan(b).act === 'rehydrate').length;
+  if (cold) console.log(c.dim(`  ${cold} in Archive — fetch one with: fleetctl backup rehydrate ${container} <blob>`));
+  return 0;
+}
+
+function runBackupGet(container, blob, opts = {}) {
+  const acct = resolveAccount();
+  if (!acct) { console.log(c.red('backup get: store absent — run `fleetctl backup init`')); return 2; }
+  if (!safeBlobName(blob)) { console.log(c.red('backup get: blob name fails the safe charset')); return 2; }
+  const one = runCapture('az', ['storage', 'blob', 'list', '--account-name', acct, '-c', container, '--auth-mode', 'login',
+    '--prefix', blob, '--query', '[].[name,properties.blobTier,properties.archiveStatus,properties.lastModified,properties.contentLength]', '-o', 'tsv']);
+  if (!one.ok) { console.log(c.red('backup get: cannot read ' + container + '/ — ' + (one.stderr || '').split('\n')[0])); return 1; }
+  const row = blobRows(one.stdout).find((b) => b.name === blob);
+  if (!row) { console.log(c.red(`backup get: ${container}/${blob} not found`)); return 1; }
+  const plan = fetchPlan(row);
+  if (plan.act !== 'download') {
+    console.log(c.yellow('backup get REFUSED — ' + plan.why));
+    if (plan.act === 'rehydrate') console.log(c.dim(`  fleetctl backup rehydrate ${container} ${blob}   (${rehydrateEta('high')})`));
+    return 2;
+  }
+  const out = opts.out || path.join(process.cwd(), path.basename(blob));
+  const r = runCapture('az', ['storage', 'blob', 'download', '--account-name', acct, '-c', container, '-n', blob,
+    '-f', out, '--auth-mode', 'login', '--overwrite', 'true', '-o', 'none']);
+  if (!r.ok) { console.log(c.red('backup get FAILED: ' + (r.stderr || '').split('\n')[0])); return 1; }
+  console.log(c.green('  downloaded ' + container + '/' + blob) + c.dim('  -> ' + out));
+  return 0;
+}
+
+function runBackupPut(container, file, opts = {}) {
+  const acct = resolveAccount();
+  if (!acct) { console.log(c.red('backup put: store absent — run `fleetctl backup init`')); return 2; }
+  if (!fs.existsSync(file)) { console.log(c.red('backup put: file not found: ' + file)); return 2; }
+  const name = opts.as || path.basename(file);
+  if (!safeBlobName(name)) { console.log(c.red('backup put: blob name fails the safe charset')); return 2; }
+  const r = runCapture('az', ['storage', 'blob', 'upload', '--account-name', acct, '-c', container, '-n', name,
+    '-f', file, '--auth-mode', 'login', '--overwrite', 'false', '-o', 'none']);
+  if (!r.ok) {
+    const dup = /already exists|BlobAlreadyExists/i.test(r.stderr || '');
+    console.log(dup
+      ? c.yellow(`backup put: ${container}/${name} already exists — append-only by design, nothing overwritten`)
+      : c.red('backup put FAILED: ' + (r.stderr || '').split('\n')[0]));
+    return dup ? 0 : 1;
+  }
+  console.log(c.green('  put ' + container + '/' + name));
+  return 0;
+}
+
+function runRehydrate(container, blob, opts = {}) {
+  const acct = resolveAccount();
+  if (!acct) { console.log(c.red('backup rehydrate: store absent — run `fleetctl backup init`')); return 2; }
+  if (!safeBlobName(blob)) { console.log(c.red('backup rehydrate: blob name fails the safe charset')); return 2; }
+  const priority = String(opts.priority || 'High');
+  if (!/^(high|standard)$/i.test(priority)) { console.log(c.red('backup rehydrate: --priority must be High or Standard')); return 2; }
+  const tier = String(opts.tier || 'Hot');
+  if (!/^(hot|cool)$/i.test(tier)) { console.log(c.red('backup rehydrate: --tier must be Hot or Cool')); return 2; }
+  const r = runCapture('az', ['storage', 'blob', 'set-tier', '--account-name', acct, '-c', container, '-n', blob,
+    '--tier', tier, '--rehydrate-priority', priority, '--auth-mode', 'login', '-o', 'none']);
+  if (!r.ok) { console.log(c.red('backup rehydrate FAILED: ' + (r.stderr || '').split('\n')[0])); return 1; }
+  console.log(c.green('  rehydration started: ' + container + '/' + blob + ' -> ' + tier));
+  console.log(c.dim('  ' + rehydrateEta(priority) + '. The blob stays unreadable until it lands; re-check with:'));
+  console.log(c.dim(`    fleetctl backup ls ${container} --prefix ${blob}`));
+  return 0;
+}
+
 // Trigger an on-VM push via the guest agent (no SSH). mode: 'final' | 'push'.
 function triggerPush(name, mode) {
   return runCapture('az', ['vm', 'run-command', 'invoke', '-g', 'rg-' + name, '-n', name + '-vm',
@@ -315,4 +435,4 @@ function runRestore(name, opts = {}) {
   return 1;
 }
 
-module.exports = { accountName, resolveAccount, runBackupInit, ensureAgentBackup, runBackupList, runBackupSnapshot, finalSnapshot, runRestore, listBlobs, triggerPush, BACKUP_RG, lifecyclePolicy, withOperational, LEDGERS, RECORDS, RESERVED, RETENTION_DAYS, COOL_DAYS, ARCHIVE_DAYS };
+module.exports = { accountName, resolveAccount, runBackupInit, ensureAgentBackup, runBackupList, runBackupSnapshot, finalSnapshot, runRestore, listBlobs, triggerPush, BACKUP_RG, lifecyclePolicy, withOperational, LEDGERS, RECORDS, RESERVED, RETENTION_DAYS, COOL_DAYS, ARCHIVE_DAYS, blobRows, fetchPlan, rehydrateEta, safeBlobName, runBackupLs, runBackupGet, runBackupPut, runRehydrate };

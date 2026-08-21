@@ -22,6 +22,8 @@ Usage:
   fleetctl policy   protect <name> | unprotect <name>  --attest "I approve <verb>ing <name>"
   fleetctl set-secrets <agent>
   fleetctl backup   init | list <agent> | snapshot <agent>
+  fleetctl backup   ls <container> [--prefix <p>] | get <container> <blob> [--out <path>]
+  fleetctl backup   put <container> <file> [--as <blob>] | rehydrate <container> <blob> [--priority High|Standard]
   fleetctl aegis    plan <contract> | up <contract> --go --attest "<sentence>"
   fleetctl aegis    grant <contract> vault|contributor|backups [--go --attest "<sentence>"]
   fleetctl aegis    update <contract> [--go --attest "<sentence>"]
@@ -136,7 +138,11 @@ Commands:
 
 check/plan make no changes. register writes only to the local (gitignored) config.`;
 
-const VALUED = new Set(['--aegis-config']);
+// Flags that take a SPACE-separated value. A flag missing from this set silently becomes a
+// bare flag and its value is read as a positional -- which is how `backup get --out <path>`
+// downloaded to the working directory while reporting success. Add the flag here the same
+// commit it is introduced, or --policy=x works and --policy x does not.
+const VALUED = new Set(['--aegis-config', '--policy', '--out', '--as', '--prefix', '--priority', '--tier', '--blob']);
 
 function parseArgs(rest) {
   const flags = new Set();
@@ -216,7 +222,15 @@ async function main(argv) {
     if (sub === 'init') { const { loadPolicy } = require('../lib/policy'); let pol = null; try { pol = loadPolicy(); } catch { /* defaults */ } return bk.runBackupInit(pol); }
     if (sub === 'list' && args[2]) return bk.runBackupList(args[2]);
     if (sub === 'snapshot' && args[2]) return bk.runBackupSnapshot(args[2]);
-    console.error(c.red('backup: usage — fleetctl backup init | list <agent> | snapshot <agent>')); return 2;
+    if (sub === 'ls' && args[2]) return bk.runBackupLs(args[2], { prefix: opts['prefix'] });
+    if (sub === 'get' && args[2] && args[3]) return bk.runBackupGet(args[2], args[3], { out: opts['out'] });
+    if (sub === 'put' && args[2] && args[3]) return bk.runBackupPut(args[2], args[3], { as: opts['as'] });
+    if (sub === 'rehydrate' && args[2] && args[3]) return bk.runRehydrate(args[2], args[3], { priority: opts['priority'], tier: opts['tier'] });
+    console.error(c.red('backup: usage — fleetctl backup init | list <agent> | snapshot <agent>'));
+    console.error(c.red('              | ls <container> [--prefix <p>] | get <container> <blob> [--out <path>]'));
+    console.error(c.red('              | put <container> <file> [--as <blob>] | rehydrate <container> <blob> [--priority High|Standard] [--tier Hot|Cool]'));
+    console.error(c.dim('  containers: <agent> (spare parts, 14d) · records (notebook, never deleted) · ledgers (receipts, never deleted)'));
+    return 2;
   }
   // Control plane. A SEPARATE lane from `up` -- see provision/lib/aegis-up.js for which
   // policy gates apply and why. Keeping it out of `up` is what stops maxFleet, the fleet
