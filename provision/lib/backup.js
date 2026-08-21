@@ -306,6 +306,52 @@ function rehydrateEta(priority) {
     : 'high priority: usually under an hour for objects this size';
 }
 
+// ---------------------------------------------------------------------------
+// Intake: the workstation on-ramp. An operator drops files into the agent's OWN container under
+// intake/, and the agent's timer sweeps them into staging within five minutes. Nothing is
+// processed by that sweep -- Process stays the operator's decision, exactly as it is for a panel
+// upload. The panel is the on-ramp from any machine; this is the one for a batch at the desk.
+//
+// Names are stamped, not trusted: two screenshots called Screenshot.png dropped a minute apart
+// are two items, not one overwriting the other.
+function intakeBlobName(file, stamp) {
+  const base = path.basename(String(file)).replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 100);
+  return 'intake/' + (stamp || new Date().toISOString().replace(/[:.]/g, '-').replace(/-\d{3}Z$/, 'Z')) + '-' + base;
+}
+
+function runIntakePut(agent, files) {
+  const acct = resolveAccount();
+  if (!acct) { console.log(c.red('intake put: store absent — run `fleetctl backup init`')); return 2; }
+  if (!files.length) { console.log(c.red('intake put: no files given')); return 2; }
+  let bad = 0, sent = 0;
+  for (const f of files) {
+    if (!fs.existsSync(f)) { console.log(c.red('  missing: ' + f)); bad++; continue; }
+    const name = intakeBlobName(f);
+    const r = runCapture('az', ['storage', 'blob', 'upload', '--account-name', acct, '-c', agent, '-n', name,
+      '-f', f, '--auth-mode', 'login', '--overwrite', 'false', '-o', 'none']);
+    if (!r.ok) { console.log(c.red('  FAILED ' + path.basename(f) + ': ' + (r.stderr || '').split('\n')[0])); bad++; continue; }
+    console.log(c.green('  dropped ') + c.dim(name));
+    sent++;
+  }
+  console.log(sent
+    ? c.dim(`\n${sent} item(s) waiting for ${agent} — its sweep stages them within 5 minutes, then Process moves them into the pipeline`)
+    : c.yellow('\nnothing dropped'));
+  return bad ? 1 : 0;
+}
+
+function runIntakeList(agent) {
+  const acct = resolveAccount();
+  if (!acct) { console.log(c.red('intake list: store absent — run `fleetctl backup init`')); return 2; }
+  const r = runCapture('az', ['storage', 'blob', 'list', '--account-name', acct, '-c', agent, '--auth-mode', 'login',
+    '--prefix', 'intake/', '--query', '[].[name,properties.blobTier,properties.archiveStatus,properties.lastModified,properties.contentLength]', '-o', 'tsv']);
+  if (!r.ok) { console.log(c.red('intake list: cannot read ' + agent + '/ — ' + (r.stderr || '').split('\n')[0])); return 1; }
+  const rows = blobRows(r.stdout);
+  if (!rows.length) { console.log(c.green(`nothing waiting for ${agent} — an empty drop box means the sweep took everything`)); return 0; }
+  for (const b of rows) console.log('  ' + (b.modified || '').slice(0, 19).padEnd(20) + String(Math.round(b.size / 1024) + 'K').padStart(8) + '  ' + b.name);
+  console.log(c.dim(`\n${rows.length} item(s) not yet swept (the timer runs every 5 minutes; the VM must be running)`));
+  return 0;
+}
+
 function runBackupLs(container, opts = {}) {
   const acct = resolveAccount();
   if (!acct) { console.log(c.red('backup ls: store absent — run `fleetctl backup init`')); return 2; }
@@ -435,4 +481,4 @@ function runRestore(name, opts = {}) {
   return 1;
 }
 
-module.exports = { accountName, resolveAccount, runBackupInit, ensureAgentBackup, runBackupList, runBackupSnapshot, finalSnapshot, runRestore, listBlobs, triggerPush, BACKUP_RG, lifecyclePolicy, withOperational, LEDGERS, RECORDS, RESERVED, RETENTION_DAYS, COOL_DAYS, ARCHIVE_DAYS, blobRows, fetchPlan, rehydrateEta, safeBlobName, runBackupLs, runBackupGet, runBackupPut, runRehydrate };
+module.exports = { accountName, resolveAccount, runBackupInit, ensureAgentBackup, runBackupList, runBackupSnapshot, finalSnapshot, runRestore, listBlobs, triggerPush, BACKUP_RG, lifecyclePolicy, withOperational, LEDGERS, RECORDS, RESERVED, RETENTION_DAYS, COOL_DAYS, ARCHIVE_DAYS, blobRows, fetchPlan, rehydrateEta, safeBlobName, runBackupLs, runBackupGet, runBackupPut, runRehydrate, intakeBlobName, runIntakePut, runIntakeList };

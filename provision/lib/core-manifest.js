@@ -23,7 +23,7 @@ const CORE = path.resolve(__dirname, '..', '..', 'core');
 
 function vendoredSet(dir) {
   return fs.readdirSync(dir)
-    .filter((n) => n.endsWith('.js') || n.endsWith('.yaml') || n === 'fetch-secret.sh' || n === 'backup-push.sh')
+    .filter((n) => n.endsWith('.js') || n.endsWith('.yaml') || n === 'fetch-secret.sh' || n === 'backup-push.sh' || n === 'intake-sweep.sh')
     .filter((n) => fs.statSync(path.join(dir, n)).isFile())
     .sort(); // bytewise for ASCII names == LC_ALL=C sort
 }

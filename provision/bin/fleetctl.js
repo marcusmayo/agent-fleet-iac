@@ -24,6 +24,7 @@ Usage:
   fleetctl backup   init | list <agent> | snapshot <agent>
   fleetctl backup   ls <container> [--prefix <p>] | get <container> <blob> [--out <path>]
   fleetctl backup   put <container> <file> [--as <blob>] | rehydrate <container> <blob> [--priority High|Standard]
+  fleetctl intake   put <agent> <file...> | list <agent>
   fleetctl aegis    plan <contract> | up <contract> --go --attest "<sentence>"
   fleetctl aegis    grant <contract> vault|contributor|backups [--go --attest "<sentence>"]
   fleetctl aegis    update <contract> [--go --attest "<sentence>"]
@@ -216,6 +217,20 @@ async function main(argv) {
     if (!file) { console.error(c.red('set-secrets: missing <agent>')); return 2; }
     return runSetSecrets(file);
   }
+  // Intake: drop files into an agent's own container; its timer stages them within 5 minutes.
+  // Runs where every fleetctl command runs -- on the Aegis host (this workstation, or the hosted
+  // plane). Agents never run fleetctl; they are tunnel-only. From any other machine, use the
+  // panel's upload, which stages over the same authenticated path.
+  if (cmd === 'intake') {
+    const bk = require('../lib/backup');
+    const sub = args[1];
+    if (sub === 'put' && args[2] && args[3]) return bk.runIntakePut(args[2], args.slice(3).filter((a) => !a.startsWith('--')));
+    if (sub === 'list' && args[2]) return bk.runIntakeList(args[2]);
+    console.error(c.red('intake: usage — fleetctl intake put <agent> <file...> | intake list <agent>'));
+    console.error(c.dim('  files land in <agent>/intake/ and the agent sweeps them into staging; Process is still yours'));
+    return 2;
+  }
+
   if (cmd === 'backup') {
     const sub = args[1];
     const bk = require('../lib/backup');

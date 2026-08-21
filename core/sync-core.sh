@@ -26,7 +26,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"        # the core/ dir
 # same normalisation as provision/lib/core-manifest.js -- change one, change the other.
 manifest_of() {   # $1 = source dir -> "hash  name" lines for the vendored set, C-sorted by name
   local d="$1" f n
-  for f in "$d"/*.js "$d"/*.yaml "$d"/fetch-secret.sh "$d"/backup-push.sh; do
+  for f in "$d"/*.js "$d"/*.yaml "$d"/fetch-secret.sh "$d"/backup-push.sh "$d"/intake-sweep.sh; do
     [ -e "$f" ] && basename "$f"
   done | LC_ALL=C sort | while read -r n; do
     printf '%s  %s\n' "$(tr -d '\r' < "$d/$n" | sha256sum | cut -c1-64)" "$n"
@@ -57,7 +57,7 @@ vendor() {
   [ -d "$DEST" ] || { echo "FATAL: dest not found: $DEST"; exit 1; }
   [ -f "$MANIFEST" ] || { echo "FATAL: no manifest: $MANIFEST"; exit 1; }
   echo "Syncing fleet-core ($CORE_REF) -> $DEST"
-  for f in "$SRCDIR"/*.js "$SRCDIR"/*.yaml "$SRCDIR"/fetch-secret.sh "$SRCDIR"/backup-push.sh "$HERE"/verify-core.sh; do
+  for f in "$SRCDIR"/*.js "$SRCDIR"/*.yaml "$SRCDIR"/fetch-secret.sh "$SRCDIR"/backup-push.sh "$SRCDIR"/intake-sweep.sh "$HERE"/verify-core.sh; do
     [ -e "$f" ] || continue
     n="$(basename "$f")"
     # LF on the way in, whatever the source checkout holds. The manifest hashes LF bytes and the

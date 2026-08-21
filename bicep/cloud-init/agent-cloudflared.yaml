@@ -78,6 +78,13 @@ runcmd:
   - 'printf "[Unit]\nDescription=Fleet agent backup push\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/agent-backup push\n" > /etc/systemd/system/agent-backup.service'
   - 'printf "[Unit]\nDescription=Daily fleet agent backup\n\n[Timer]\nOnCalendar=daily\nRandomizedDelaySec=1800\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n" > /etc/systemd/system/agent-backup.timer'
   - 'systemctl daemon-reload && systemctl enable --now agent-backup.timer || echo "backup timer enable failed (non-fatal)"'
+  # --- Intake sweep: pulls operator drops from this agent's own container into staging, every
+  # 5 min. STAGES ONLY -- Process is still the operator's decision. No-ops on an agent whose
+  # profile has not vendored the script yet, and on a fleet with no backup store.
+  - 'echo IyEvYmluL2Jhc2gKQUQ9L2hvbWUvYWdlbnRhZG1pbi9hZ2VudApbIC1kICIkQUQvc2NhZmZvbGQiIF0gJiYgQUQ9IiRBRC9zY2FmZm9sZCIKWyAteCAiJEFEL3NjcmlwdHMvaW50YWtlLXN3ZWVwLnNoIiBdIHx8IGV4aXQgMApleGVjIGJhc2ggIiRBRC9zY3JpcHRzL2ludGFrZS1zd2VlcC5zaCIgIiRAIgo= | base64 -d > /usr/local/bin/agent-intake-sweep && chmod 0755 /usr/local/bin/agent-intake-sweep'
+  - 'printf "[Unit]\nDescription=Fleet agent intake sweep from the store\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/agent-intake-sweep\n" > /etc/systemd/system/agent-intake-sweep.service'
+  - 'printf "[Unit]\nDescription=Fleet agent intake sweep timer\n\n[Timer]\nOnBootSec=2min\nOnUnitActiveSec=5min\n\n[Install]\nWantedBy=timers.target\n" > /etc/systemd/system/agent-intake-sweep.timer'
+  - 'systemctl daemon-reload && systemctl enable --now agent-intake-sweep.timer || echo "intake sweep timer enable failed (non-fatal)"'
   # --- Fleet intake: wrapper + 2-min timer (no-ops on profiles without scripts/intake.js) ---
   # Same self-detecting base64 pattern as the backup wrapper -- no shell-quoting to break.
   - 'echo IyEvYmluL2Jhc2gKQUQ9L2hvbWUvYWdlbnRhZG1pbi9hZ2VudApbIC1kICIkQUQvc2NhZmZvbGQiIF0gJiYgQUQ9IiRBRC9zY2FmZm9sZCIKUD0iJChncmVwIC1FICdeQUdFTlRfUFJPRklMRT0nICIkQUQvLnByb3Zpc2lvbi1mbGFncyIgMj4vZGV2L251bGwgfCBoZWFkIC0xIHwgY3V0IC1kPSAtZjIpIgpbIC1uICIkUCIgXSB8fCBleGl0IDAKQz0iJHtQfS13ZWJjaGF0Igpkb2NrZXIgZXhlYyAiJEMiIHRlc3QgLWUgL2FwcC9zY3JpcHRzL2ludGFrZS5qcyAyPi9kZXYvbnVsbCB8fCBleGl0IDAKZXhlYyBkb2NrZXIgZXhlYyAiJEMiIG5vZGUgL2FwcC9zY3JpcHRzL2ludGFrZS5qcwo= | base64 -d > /usr/local/bin/agent-intake && chmod 0755 /usr/local/bin/agent-intake'
