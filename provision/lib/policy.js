@@ -18,9 +18,20 @@ const DEFAULTS = {
 };
 
 function resolvePolicyPath(explicit) {
+  // An explicit path or $AEGIS_POLICY is the operator STATING which file is canonical. Two
+  // policy files exist in this fleet -- the hosted plane's live copy and the workstation
+  // checkout -- so answering from a different one than the operator named is a wrong answer,
+  // not a fallback. A named path that does not exist FAILS here; only implicit discovery
+  // (fleet root, then the lib-relative checkout) is allowed to fall through.
+  const named = explicit ? path.resolve(explicit)
+    : (process.env.AEGIS_POLICY ? path.resolve(process.env.AEGIS_POLICY) : null);
+  if (named) {
+    if (!fs.existsSync(named)) {
+      throw new Error(`policy file not found: ${named} (named by ${explicit ? 'an explicit path' : '$AEGIS_POLICY'}) -- fix the path or unset it; refusing to answer from a different policy file`);
+    }
+    return named;
+  }
   const tries = [];
-  if (explicit) tries.push(path.resolve(explicit));
-  if (process.env.AEGIS_POLICY) tries.push(path.resolve(process.env.AEGIS_POLICY));
   const root = findFleetRoot();
   if (root) tries.push(path.join(root, 'provision', 'aegis.policy.jsonc'));
   tries.push(path.resolve(__dirname, '..', 'aegis.policy.jsonc')); // …/provision/lib -> …/provision
@@ -35,6 +46,26 @@ function loadPolicy(explicit, resolve = resolvePolicyPath) {
   try { raw = JSON.parse(stripJsonc(fs.readFileSync(p, 'utf8'))); }
   catch (e) { throw new Error(`aegis.policy.jsonc is invalid (${e.message})`); }
   return { ...DEFAULTS, ...raw, source: p };
+}
+
+// The protection read WITH its provenance. A caller that takes a destructive action on
+// "policy says this agent is not protected" has to be able to tell that claim apart from
+// "no policy file spoke at all": decommission deletes the fleet-protect lock -- the last
+// structure between an operator error and an RG delete -- as an orphan on the strength of
+// it, and built-in defaults carry an empty protectedAgents list that reads exactly like a
+// policy saying no. ok is true only when a real file backed the answer.
+function readProtection(explicit) {
+  let pol;
+  try { pol = loadPolicy(explicit); }
+  catch (e) { return { ok: false, resolved: false, source: null, protectedAgents: null, error: e.message }; }
+  const resolved = pol.source !== '(built-in defaults)';
+  return {
+    ok: resolved,
+    resolved,
+    source: resolved ? pol.source : null,
+    protectedAgents: Array.isArray(pol.protectedAgents) ? pol.protectedAgents : [],
+    error: resolved ? null : 'no policy file resolved (built-in defaults answered)',
+  };
 }
 
 // Fail-closed provisioning gate.
@@ -325,4 +356,4 @@ function setPolicy({ key, value, attest, explicit }) {
   return { path: p, key: spec.file, from: before, to: next, ledgered: rec.ts, syncOutcome, outcome };
 }
 
-module.exports = { DEFAULTS, resolvePolicyPath, loadPolicy, checkProvision, showPolicy, setPolicy, setProtection, attestPhrase, ledger, syncVerdict };
+module.exports = { DEFAULTS, resolvePolicyPath, loadPolicy, readProtection, checkProvision, showPolicy, setPolicy, setProtection, attestPhrase, ledger, syncVerdict };

@@ -145,17 +145,27 @@ async function discover(file, d, accountId, cfToken, aegisConfig) {
   return s;
 }
 
+// One rule, two consumers: the plan prints this verdict and execute acts on it, so the
+// sentence the operator reads before typing --go is the sentence that governs the delete.
+// A fleet-protect lock is only an ORPHAN if a real policy file says the agent is not
+// protected. Absence of a policy is not a statement that the agent is unprotected, and a
+// mirror is not removed on a default.
+function lockVerdict(locks, protection) {
+  const foreign = (locks || []).filter((l) => l.name !== 'fleet-protect');
+  const mirror = (locks || []).filter((l) => l.name === 'fleet-protect');
+  if (foreign.length) return { act: 'refuse-foreign', foreign, mirror };
+  if (mirror.length && !(protection && protection.ok)) {
+    return { act: 'refuse-unjudged', foreign, mirror, why: (protection && protection.error) || 'no policy file resolved' };
+  }
+  return { act: 'proceed', foreign, mirror, source: (protection && protection.source) || null };
+}
+
 function printPlan(s) {
   const del = (extra) => c.yellow('DELETE') + (extra ? c.dim('  ' + extra) : '');
   const gone = (extra) => c.dim((extra ? extra + ' — ' : '') + 'absent');
   const vaultLine = s.vault
     ? del(s.vault.name + ' — soft-deleted by the RG delete, then PURGED so the name is free for a same-name re-provision')
     : s.deletedVault ? del(s.deletedVault.name + ' — already soft-deleted; PURGE') : gone('vault');
-  console.log(`  8. Key Vault (purge)     ${vaultLine}`);
-  for (const l of (s.locks || [])) {
-    const ours = l.name === 'fleet-protect';
-    console.log('  !  RG lock              ' + (ours ? c.yellow(l.name + ' (' + l.level + ') — orphan of a failed unprotect sync; --go removes it before the RG delete') : c.red(l.name + ' (' + l.level + ') — NOT the fleet mirror; the RG delete will be refused until it is removed by whoever set it')));
-  }
   console.log(c.bold(`\nTeardown plan for "${s.name}"  (surfaces present are DELETE; absent are skipped)`));
   console.log(`  1 Aegis registry     ${s.aegisResolved
     ? (s.aegis ? c.yellow('DEREGISTER') + c.dim('  ' + s.aegisPath) : c.dim('not registered  ' + s.aegisPath))
@@ -166,6 +176,18 @@ function printPlan(s) {
   console.log(`  5 CF service tokens  ${(s.tokens && s.tokens.length) ? del(s.tokens.map((t) => `${t.name} ${t.id}`).join(', ')) : gone('none named aegis-' + s.name + ' / <plane>-' + s.name + ', none referenced by the app')}`);
   console.log(`  6 CF DNS (CNAME)     ${s.dns ? del(s.fqdn) : gone(s.fqdn)}`);
   console.log(`  7 CF tunnel          ${s.tunnel ? del(s.tunnel.id) : gone(s.name)}`);
+  console.log(`  8 Key Vault (purge)  ${vaultLine}`);
+  const lv = lockVerdict(s.locks, s.protection);
+  for (const l of (lv.foreign || [])) {
+    console.log('  !  RG lock           ' + c.red(l.name + ' (' + l.level + ') — NOT the fleet mirror; the RG delete will be refused until it is removed by whoever set it'));
+  }
+  for (const l of (lv.mirror || [])) {
+    console.log('  !  RG lock           ' + (lv.act === 'proceed'
+      ? c.yellow(l.name + ' (' + l.level + ') — policy ' + lv.source + ' says "' + s.name + '" is not protected, so this is an orphan of a failed unprotect sync; --go removes it before the RG delete')
+      : lv.act === 'refuse-unjudged'
+        ? c.red(l.name + ' (' + l.level + ') — UNJUDGEABLE: ' + lv.why + '. A mirror is only an orphan if a policy file says so, so --go will REFUSE the RG delete rather than remove it on a default')
+        : c.red(l.name + ' (' + l.level + ') — the fleet mirror, but a foreign lock above already refuses this teardown')));
+  }
   if (s.appSsh || s.dnsSsh || (s.policies && s.policies.length)) {
     console.log(c.dim('  legacy leftovers (hand-built era):'));
     if (s.appSsh) console.log(`  +  CF Access app     ${del(s.sshFqdn)}`);
@@ -193,15 +215,18 @@ async function execute(file, d, accountId, cfToken, aegisConfig, s) {
   // 3. Azure RG (blocking so the connector dies before the tunnel delete)
   let rgGone = !s.rg;
   if (s.rg) {
-    const foreign = (s.locks || []).filter((l) => l.name !== 'fleet-protect');
-    const mirror = (s.locks || []).filter((l) => l.name === 'fleet-protect');
-    if (foreign.length) {
+    const lv = lockVerdict(s.locks, s.protection);
+    const { foreign, mirror } = lv;
+    if (lv.act === 'refuse-foreign') {
       fail('Azure RG delete', new Error('refused: lock(s) not set by the fleet: ' + foreign.map((l) => l.name + ' (' + l.level + ')').join(', ') + ' — remove them first (az lock delete) or leave the RG'));
+    } else if (lv.act === 'refuse-unjudged') {
+      fail('Azure RG delete', new Error('refused: a fleet-protect lock is present and protection cannot be verified (' + lv.why + ') — the mirror is an orphan only if a policy file says the agent is not protected; it is not removed on a default'));
     } else {
       for (const l of mirror) {
-        // policy already said "not protected" (the gate above), so this lock is an orphan mirror
+        // a NAMED policy file said "not protected" (the gate above and lockVerdict), so this
+        // lock is an orphan mirror -- the source rides the line so the ledger says which file
         const lr = runCapture('az', ['lock', 'delete', '--name', l.name, '-g', d.azure.resourceGroup]);
-        if (lr.status === 0) ok(`Azure RG lock: removed orphan mirror ${l.name} (policy says not protected)`);
+        if (lr.status === 0) ok(`Azure RG lock: removed orphan mirror ${l.name} (policy ${lv.source} says not protected)`);
         else fail(`Azure RG lock delete (${l.name})`, new Error(String(lr.stderr || '').trim() || `az exit ${lr.status}`));
       }
       console.log(c.dim(`  … deleting ${d.azure.resourceGroup} (blocking; a few minutes) …`));
@@ -283,15 +308,16 @@ async function runDecommission(file, opts = {}) {
   const aegisPath = opts.aegisConfig || env('AEGIS_CONFIG'); // up finds it via the env var too
   // Protection gate (Can't layer): a protected agent REFUSES teardown before any
   // discovery or deletion. Unprotect first via the attested policy ceremony.
+  const protection = require('./policy').readProtection(opts.policy);
   {
-    let prot;
-    try { prot = (require('./policy').loadPolicy() || {}).protectedAgents || []; }
-    catch (e) { prot = null; }
-    if (opts.go && prot === null) {
-      console.error(c.red('decommission REFUSED — cannot read aegis.policy.jsonc to verify protection (fail-closed). Fix the policy file first.'));
-      return 3;
+    if (!protection.ok) {
+      if (opts.go) {
+        console.error(c.red('decommission REFUSED — cannot verify protection: ' + protection.error + ' (fail-closed). Name the canonical policy with $AEGIS_POLICY or --policy, then re-run.'));
+        return 3;
+      }
+      console.log(c.yellow('\nPOLICY UNREADABLE — ' + protection.error + '; --go will REFUSE until a policy file resolves.'));
     }
-    if (Array.isArray(prot) && prot.includes(d.register.name)) {
+    if (protection.ok && protection.protectedAgents.includes(d.register.name)) {
       if (!opts.go) {
         console.log(c.yellow(`\nPROTECTED — "${d.register.name}" is in policy protectedAgents; --go will REFUSE until it is removed.`));
       } else {
@@ -305,6 +331,7 @@ async function runDecommission(file, opts = {}) {
   }
   console.log(c.bold(`\nDecommission "${d.register.name}" (${d.azure.profile}) at ${d.cloudflare.fqdn}`));
   const s = await discover(file, d, accountId, cfToken, aegisPath);
+  s.protection = protection;
   printPlan(s);
 
   const anything = s.aegis || s.localFile || s.rg || s.app || (s.tokens && s.tokens.length) || s.dns || s.tunnel || s.appSsh || s.dnsSsh || (s.policies && s.policies.length);
@@ -333,4 +360,4 @@ async function runDecommission(file, opts = {}) {
   return 0;
 }
 
-module.exports = { runDecommission, discover, printPlan, registryState, selectAgentTokens };
+module.exports = { runDecommission, discover, printPlan, registryState, selectAgentTokens, lockVerdict };

@@ -17,7 +17,7 @@ Usage:
   fleetctl up       <contract.agent.jsonc> [--go] [--aegis-config <path>]
   fleetctl register <contract.agent.jsonc> [--aegis-config <path>]
   fleetctl deregister <name | contract.agent.jsonc> [--aegis-config <path>]
-  fleetctl decommission <contract.agent.jsonc> [--go] [--aegis-config <path>]
+  fleetctl decommission <contract.agent.jsonc> [--go] [--aegis-config <path>] [--policy <path>]
   fleetctl policy   [show] | set <key> <value> --attest "I approve setting <key> to <value>"
   fleetctl policy   protect <name> | unprotect <name>  --attest "I approve <verb>ing <name>"
   fleetctl set-secrets <agent>
@@ -258,7 +258,7 @@ async function main(argv) {
   }
   if (cmd === 'decommission') {
     if (!file) { console.error(c.red('decommission: missing <contract.agent.jsonc>')); return 2; }
-    return runDecommission(file, { go: flags.has('--go'), aegisConfig });
+    return runDecommission(file, { go: flags.has('--go'), aegisConfig, policy: opts['policy'] });
   }
 
   if (cmd === 'policy') {
