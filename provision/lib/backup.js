@@ -11,6 +11,60 @@ const { c, runCapture } = require('./util');
 
 const BACKUP_RG = 'rg-fleet-backups';
 const RETENTION_DAYS = 14;
+// Three classes, one store, the same for every agent. Retention is a property of the
+// CONTAINER, never of the agent, so a new agent inherits all three the day it exists and
+// there is no per-agent policy to set or to forget.
+//   <agent>/      operational spare parts -- the nightly machine-state tarball. Rebuildable,
+//                 so it is the only class the delete rule touches (RETENTION_DAYS).
+//   records/      the notebook: curated content an operator reads and acts on. NEVER deleted.
+//                 records/data/  ages Hot -> Cool -> Archive on the shared schedule.
+//                 records/index/ is the always-hot card catalogue -- no tier rule names it,
+//                 so a year-old lookup is instant and only the objects it names rehydrate.
+//   ledgers/      the receipts: hash chains proving a thing existed unaltered on a date.
+//                 NEVER deleted, same ageing, plus a container immutability policy so a
+//                 mis-scoped rule cannot reach them.
+const LEDGERS = 'ledgers';
+const RECORDS = 'records';
+const RESERVED = [LEDGERS, RECORDS];
+const COOL_DAYS = 30;
+const ARCHIVE_DAYS = 180;      // six months: an ordinary half-year look-back never rehydrates
+const IMMUTABLE_DAYS = 3650;   // ledgers: unlocked time-based retention (locking it is a one-way
+                               // door and belongs to its own attested decision, not a build step)
+
+// The lifecycle document, built from the operational container names. Pure: the only input is
+// which containers hold spare parts. Azure filters are include-only -- there is no "exclude" --
+// so the delete rule NAMES the containers it may empty and can reach nothing else by
+// construction. The two permanent classes carry tier actions and no delete action at all.
+function lifecyclePolicy(operational = []) {
+  const prefixes = [...new Set(operational.filter(Boolean).map((n) => String(n).replace(/\/+$/, '') + '/'))].sort();
+  const rules = [];
+  if (prefixes.length) {
+    rules.push({ enabled: true, name: 'fleet-backup-retention', type: 'Lifecycle',
+      definition: { filters: { blobTypes: ['blockBlob'], prefixMatch: prefixes },
+        actions: { baseBlob: { delete: { daysAfterModificationGreaterThan: RETENTION_DAYS } } } } });
+  }
+  for (const [name, prefix] of [['fleet-records-tiering', RECORDS + '/data/'], ['fleet-ledgers-tiering', LEDGERS + '/']]) {
+    rules.push({ enabled: true, name, type: 'Lifecycle',
+      definition: { filters: { blobTypes: ['blockBlob'], prefixMatch: [prefix] },
+        actions: { baseBlob: {
+          tierToCool: { daysAfterModificationGreaterThan: COOL_DAYS },
+          tierToArchive: { daysAfterModificationGreaterThan: ARCHIVE_DAYS },
+        } } } });
+  }
+  return { rules };
+}
+
+// Enrolling an agent into the delete rule. Idempotent, and it REFUSES to enrol a reserved
+// container: the day a rule with a delete action names ledgers/ or records/ is the day the
+// store stops being a store.
+function withOperational(policy, name) {
+  const clean = String(name || '').replace(/\/+$/, '');
+  if (!clean) throw new Error('backup: cannot enrol an unnamed container');
+  if (RESERVED.includes(clean)) throw new Error(`backup: ${clean}/ is a permanent class and is never enrolled into deletion`);
+  const have = (((policy || {}).rules || []).find((r) => r.name === 'fleet-backup-retention') || {})
+    .definition?.filters?.prefixMatch || [];
+  return lifecyclePolicy([...have, clean]);
+}
 
 function accountName(subId) {
   return 'fleetbk' + crypto.createHash('sha256').update(String(subId)).digest('hex').slice(0, 12);
@@ -31,6 +85,81 @@ function resolveAccount() {
   return accountExists(acct) ? acct : '';
 }
 
+// Containers that exist right now, minus the permanent classes -- the operational set the
+// delete rule is allowed to name. Read live so `backup init` is self-correcting on a store
+// that already has agents in it.
+function listContainers(acct) {
+  const r = runCapture('az', ['storage', 'container', 'list', '--account-name', acct,
+    '--auth-mode', 'login', '--query', '[].name', '-o', 'tsv']);
+  if (!r.ok) return null;
+  return (r.stdout || '').trim().split('\n').map((x) => x.trim()).filter(Boolean);
+}
+
+function putLifecycle(acct, pol) {
+  const tmp = path.join(os.tmpdir(), 'fleet-backup-policy-' + process.pid + '.json');
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(pol));
+    return runCapture('az', ['storage', 'account', 'management-policy', 'create',
+      '--account-name', acct, '-g', BACKUP_RG, '--policy', '@' + tmp, '-o', 'none']);
+  } finally { try { fs.unlinkSync(tmp); } catch { /* gone */ } }
+}
+
+function readLifecycle(acct) {
+  const r = runCapture('az', ['storage', 'account', 'management-policy', 'show',
+    '--account-name', acct, '-g', BACKUP_RG, '--query', 'policy', '-o', 'json']);
+  if (!r.ok) return null;
+  try { return JSON.parse(r.stdout || 'null'); } catch { return null; }
+}
+
+// The class's own rules, written beside the data. An archive that cannot explain its retention
+// is evidence nobody can rely on. Never overwritten: on a re-run an existing README is left
+// alone (a container under time-based retention refuses the overwrite anyway).
+function ensureReadme(acct, container, body) {
+  const ls = runCapture('az', ['storage', 'blob', 'exists', '--account-name', acct, '-c', container,
+    '-n', 'README.md', '--auth-mode', 'login', '--query', 'exists', '-o', 'tsv']);
+  if (ls.ok && String(ls.stdout || '').trim().toLowerCase() === 'true') return { ok: true, skipped: true };
+  const tmp = path.join(os.tmpdir(), 'fleet-readme-' + container + '-' + process.pid + '.md');
+  try {
+    fs.writeFileSync(tmp, body);
+    return runCapture('az', ['storage', 'blob', 'upload', '--account-name', acct, '-c', container,
+      '-n', 'README.md', '-f', tmp, '--auth-mode', 'login', '--overwrite', 'false', '-o', 'none']);
+  } finally { try { fs.unlinkSync(tmp); } catch { /* gone */ } }
+}
+
+const README_RECORDS = [
+  '# records — the notebook class',
+  '',
+  'Curated content an operator reads and acts on: summaries, action items, commitments.',
+  '',
+  '- NEVER deleted. No lifecycle rule in this account carries a delete action for this prefix.',
+  '- records/data/  ages Hot -> Cool at ' + COOL_DAYS + 'd -> Archive at ' + ARCHIVE_DAYS + 'd.',
+  '- records/index/ is never tiered. It stays instantly readable forever so a look-back can',
+  '  find what it needs and rehydrate only the objects it names.',
+  '',
+  'Archive retrieval is not instant: standard can take hours, high priority is typically under',
+  'an hour for objects this size. Anything inside ' + ARCHIVE_DAYS + ' days reads directly.',
+  '',
+  'Retention and traceability statement: keel-rca-chat-30.md, appendix.',
+  '',
+].join('\n');
+
+const README_LEDGERS = [
+  '# ledgers — the receipts class',
+  '',
+  'Hash-chained audit records. They carry metadata, counts and hashes -- never the content of',
+  'a prompt, a reply or a note. A chain proves a thing existed unaltered on a date; it does not',
+  'say what the thing said.',
+  '',
+  '- NEVER deleted, and never purged. Chains outlive the agents that wrote them.',
+  '- Ages Hot -> Cool at ' + COOL_DAYS + 'd -> Archive at ' + ARCHIVE_DAYS + 'd.',
+  '- The container also carries an UNLOCKED time-based immutability policy (' + IMMUTABLE_DAYS + ' days),',
+  '  so a mis-scoped lifecycle rule cannot delete a chain. Locking it is irreversible and is a',
+  '  separate attested decision, not a build step.',
+  '',
+  'Retention and traceability statement: keel-rca-chat-30.md, appendix.',
+  '',
+].join('\n');
+
 function runBackupInit(policy) {
   console.log(c.cyan('backup init'));
   const id = subId();
@@ -48,17 +177,34 @@ function runBackupInit(policy) {
     if (!r.ok) { console.log(c.red('  FAILED creating account: ' + (r.stderr || '').split('\n')[0])); return 1; }
   }
   console.log(c.green('  account: ' + acct));
-  // Lifecycle: delete backup blobs after RETENTION_DAYS (management policy, idempotent PUT).
-  const pol = { rules: [{ enabled: true, name: 'fleet-backup-retention', type: 'Lifecycle',
-    definition: { filters: { blobTypes: ['blockBlob'] },
-      actions: { baseBlob: { delete: { daysAfterModificationGreaterThan: RETENTION_DAYS } } } } }] };
-  const tmp = path.join(os.tmpdir(), 'fleet-backup-policy-' + process.pid + '.json');
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(pol));
-    r = runCapture('az', ['storage', 'account', 'management-policy', 'create',
-      '--account-name', acct, '-g', BACKUP_RG, '--policy', '@' + tmp, '-o', 'none']);
-  } finally { try { fs.unlinkSync(tmp); } catch { /* gone */ } }
-  console.log(r.ok ? c.green(`  retention: ${RETENTION_DAYS}d lifecycle`) : c.yellow('  retention policy failed (non-fatal): ' + (r.stderr || '').split('\n')[0]));
+  // The two permanent classes. Shared by every agent, created before the rules that govern them.
+  for (const cn of RESERVED) {
+    r = runCapture('az', ['storage', 'container', 'create', '--account-name', acct, '-n', cn, '--auth-mode', 'login', '-o', 'none']);
+    console.log(r.ok ? c.green('  container: ' + cn + '/') : c.yellow('  container ' + cn + ' failed (non-fatal): ' + (r.stderr || '').split('\n')[0]));
+  }
+  // READMEs first: ledgers takes an immutability policy below, after which a blob cannot be
+  // overwritten -- so the class's own statement is written before the lock goes on.
+  for (const [cn, body] of [[RECORDS, README_RECORDS], [LEDGERS, README_LEDGERS]]) {
+    const rr = ensureReadme(acct, cn, body);
+    console.log(rr.ok ? c.dim('  ' + cn + '/README.md ' + (rr.skipped ? '(already present)' : 'written')) : c.yellow('  ' + cn + '/README.md failed (non-fatal)'));
+  }
+  // Lifecycle: ONE document, three classes. The delete rule names the operational containers
+  // that exist right now and can reach nothing else; the two permanent classes carry tier
+  // actions and no delete action at all.
+  const operational = (listContainers(acct) || []).filter((n) => !RESERVED.includes(n));
+  const pol = lifecyclePolicy(operational);
+  r = putLifecycle(acct, pol);
+  const delRule = pol.rules.find((x) => x.name === 'fleet-backup-retention');
+  console.log(r.ok
+    ? c.green(`  lifecycle: delete ${RETENTION_DAYS}d on ${delRule ? delRule.definition.filters.prefixMatch.join(', ') : 'nothing yet (no agent containers)'}`)
+    : c.yellow('  lifecycle failed (non-fatal): ' + (r.stderr || '').split('\n')[0]));
+  if (r.ok) console.log(c.green(`  lifecycle: ${RECORDS}/data/ and ${LEDGERS}/ -> Cool ${COOL_DAYS}d, Archive ${ARCHIVE_DAYS}d, NO delete action  (${RECORDS}/index/ never tiers)`));
+  // Structural backstop on the receipts: an unlocked time-based retention policy means even a
+  // mis-scoped rule cannot delete a chain. Unlocked, because locking it cannot be undone.
+  r = runCapture('az', ['storage', 'container', 'immutability-policy', 'create', '-g', BACKUP_RG,
+    '--account-name', acct, '-c', LEDGERS, '--period', String(IMMUTABLE_DAYS), '-o', 'none']);
+  const already = !r.ok && /exist|already/i.test(r.stderr || '');
+  console.log((r.ok || already) ? c.green(`  ${LEDGERS}/: immutability ${IMMUTABLE_DAYS}d (unlocked)`) : c.yellow('  immutability policy failed (non-fatal): ' + (r.stderr || '').split('\n')[0]));
   // Deployer gets data-plane rights so list/restore work from the workstation.
   const who = runCapture('az', ['ad', 'signed-in-user', 'show', '--query', 'id', '-o', 'tsv']);
   if (who.ok && (who.stdout || '').trim()) {
@@ -90,6 +236,16 @@ function ensureAgentBackup(name) {
   } else {
     console.log(c.yellow('  backup: could not resolve agent identity (non-fatal)'));
   }
+  // Enrol this container into the delete rule. Not a per-agent policy -- the same standard
+  // class list, one prefix longer. If this ever fails the agent's spare parts simply stop
+  // being deleted (cost, never loss), and the permanent classes are unreachable from here.
+  const cur = readLifecycle(acct);
+  let next; try { next = withOperational(cur, name); } catch (e) { console.log(c.yellow('  backup: ' + e.message)); return; }
+  const rl = putLifecycle(acct, next);
+  const del = next.rules.find((x) => x.name === 'fleet-backup-retention');
+  console.log(rl.ok
+    ? c.green(`  backup: retention enrols ${name}/ (${RETENTION_DAYS}d; ${del.definition.filters.prefixMatch.length} operational container(s))`)
+    : c.yellow('  backup: retention enrolment failed (non-fatal, nothing is deleted): ' + (rl.stderr || '').split('\n')[0]));
 }
 
 function listBlobs(name, acct) {
@@ -159,4 +315,4 @@ function runRestore(name, opts = {}) {
   return 1;
 }
 
-module.exports = { accountName, resolveAccount, runBackupInit, ensureAgentBackup, runBackupList, runBackupSnapshot, finalSnapshot, runRestore, listBlobs, triggerPush, BACKUP_RG };
+module.exports = { accountName, resolveAccount, runBackupInit, ensureAgentBackup, runBackupList, runBackupSnapshot, finalSnapshot, runRestore, listBlobs, triggerPush, BACKUP_RG, lifecyclePolicy, withOperational, LEDGERS, RECORDS, RESERVED, RETENTION_DAYS, COOL_DAYS, ARCHIVE_DAYS };
