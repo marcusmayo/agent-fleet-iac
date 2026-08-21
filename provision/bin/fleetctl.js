@@ -271,6 +271,10 @@ async function main(argv) {
       try {
         const r = setProtection({ name, on: args[1] === 'protect', attest });
         console.log(c.green(`policy: protectedAgents ${JSON.stringify(r.from)} -> ${JSON.stringify(r.to)}`) + c.dim(`  (${r.path}; ledgered ${r.ledgered})`) + (r.noop ? c.dim('  [no-op]') : '') + (r.syncOutcome ? '\n' + (r.syncOutcome.startsWith('ok') ? c.green('azure sync ' + r.syncOutcome) : c.red('azure sync ' + r.syncOutcome)) : ''));
+        if (String(r.outcome || '').startsWith('incomplete')) {
+          console.error(c.red(`policy ${args[1]} INCOMPLETE -- the policy gate applied and is enforcing; the Azure mirror did not. Ledgered: ${r.outcome}`));
+          return 1;
+        }
         return 0;
       } catch (e) { console.error(c.red(e.message)); return 3; }
     }
@@ -289,6 +293,10 @@ async function main(argv) {
       try {
         const r = setPolicy({ key: pos[0], value: pos[1], attest });
         console.log(c.green(`policy: ${r.key} ${JSON.stringify(r.from)} -> ${JSON.stringify(r.to)}`) + c.dim(`  (${r.path}; ledgered ${r.ledgered})`) + (r.syncOutcome ? '\n' + (r.syncOutcome.startsWith('ok') ? c.green('azure sync ' + r.syncOutcome) : c.red('azure sync ' + r.syncOutcome)) : ''));
+        if (String(r.outcome || '').startsWith('incomplete')) {
+          console.error(c.red(`policy set ${r.key} INCOMPLETE -- the policy gate applied and is enforcing; the Azure mirror did not. Ledgered: ${r.outcome}`));
+          return 1;
+        }
         return 0;
       } catch (e) { console.error(c.red(String(e.message || e))); return 2; }
     }

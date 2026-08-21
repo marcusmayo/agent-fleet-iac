@@ -176,6 +176,20 @@ function showPolicy(explicit) {
 }
 
 
+// A control whose second, structural layer did not land is NOT ok. The policy write is
+// the gate and lands first; the Azure mirror (the CanNotDelete lock on rg-<n>; the Cost
+// Management budget object) is best-effort. When the mirror fails the control is only
+// half-applied, so the ledger's verdict is DERIVED from the sync line, never asserted:
+// `incomplete` -- not `failed`, because the gate is real and enforcing, and not `ok`,
+// because the structure the gate is mirrored into is missing. Live: an unprotect
+// ledgered ok with syncOutcome AuthorizationFailed and left an agent's RG holding a
+// fleet-protect lock no policy entry explained; on the panel that failure was invisible.
+function syncVerdict(syncOutcome) {
+  if (!syncOutcome) return 'ok';
+  const why = String(syncOutcome).replace(/^failed:\s*/, '');   // the budget lane already says failed; don't stutter
+  return /^ok\b/.test(String(syncOutcome)) ? 'ok' : 'incomplete: policy applied, azure sync failed -- ' + why;
+}
+
 // Single-name protection ceremony: `I approve protecting <name>` / `I approve
 // unprotecting <name>` -- short, order-free, one agent per attestation. The
 // generic `set protectedAgents` grammar remains for bulk edits / `none`.
@@ -210,8 +224,9 @@ function setProtection({ name, on, attest, explicit }) {
     ? runAz(['lock', 'create', '--name', 'fleet-protect', '-g', 'rg-' + name, '--lock-type', 'CanNotDelete', '-o', 'none'])
     : runAz(['lock', 'delete', '--name', 'fleet-protect', '-g', 'rg-' + name]);
   const syncOutcome = r.status === 0 ? `ok: ${on ? 'locked' : 'unlocked'} rg-${name}` : `${on ? 'lock' : 'unlock'} rg-${name} failed: ${r.err}`;
-  const rec = ledger(p, { action: 'policy.' + verb, key: 'protectedAgents', name, from: before, to: next, phrase: attest, outcome: 'ok', syncOutcome });
-  return { path: p, from: before, to: next, ledgered: rec.ts, syncOutcome };
+  const outcome = syncVerdict(syncOutcome);
+  const rec = ledger(p, { action: 'policy.' + verb, key: 'protectedAgents', name, from: before, to: next, phrase: attest, outcome, syncOutcome });
+  return { path: p, from: before, to: next, ledgered: rec.ts, syncOutcome, outcome };
 }
 
 function setPolicy({ key, value, attest, explicit }) {
@@ -305,8 +320,9 @@ function setPolicy({ key, value, attest, explicit }) {
         : `failed: ${put.err}`;
     }
   }
-  const rec = ledger(p, { action: 'policy.set', key: spec.file, from: before, to: next, phrase: attest, outcome: 'ok', ...(syncOutcome ? { syncOutcome } : {}) });
-  return { path: p, key: spec.file, from: before, to: next, ledgered: rec.ts, syncOutcome };
+  const outcome = syncVerdict(syncOutcome);
+  const rec = ledger(p, { action: 'policy.set', key: spec.file, from: before, to: next, phrase: attest, outcome, ...(syncOutcome ? { syncOutcome } : {}) });
+  return { path: p, key: spec.file, from: before, to: next, ledgered: rec.ts, syncOutcome, outcome };
 }
 
-module.exports = { DEFAULTS, resolvePolicyPath, loadPolicy, checkProvision, showPolicy, setPolicy, setProtection, attestPhrase, ledger };
+module.exports = { DEFAULTS, resolvePolicyPath, loadPolicy, checkProvision, showPolicy, setPolicy, setProtection, attestPhrase, ledger, syncVerdict };
