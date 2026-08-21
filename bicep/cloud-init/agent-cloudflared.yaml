@@ -81,7 +81,10 @@ runcmd:
   # --- Intake sweep: pulls operator drops from this agent's own container into staging, every
   # 5 min. STAGES ONLY -- Process is still the operator's decision. No-ops on an agent whose
   # profile has not vendored the script yet, and on a fleet with no backup store.
-  - 'echo IyEvYmluL2Jhc2gKQUQ9L2hvbWUvYWdlbnRhZG1pbi9hZ2VudApbIC1kICIkQUQvc2NhZmZvbGQiIF0gJiYgQUQ9IiRBRC9zY2FmZm9sZCIKWyAteCAiJEFEL3NjcmlwdHMvaW50YWtlLXN3ZWVwLnNoIiBdIHx8IGV4aXQgMApleGVjIGJhc2ggIiRBRC9zY3JpcHRzL2ludGFrZS1zd2VlcC5zaCIgIiRAIgo= | base64 -d > /usr/local/bin/agent-intake-sweep && chmod 0755 /usr/local/bin/agent-intake-sweep'
+  # The guard is -f, NOT -x: vendored scripts are committed from a Windows workstation and land
+  # 100644 in the agent repos (backup-push.sh is 644 today), so an -x test would be false on every
+  # agent and the sweep would silently never run. bash <file> does not need the exec bit.
+  - 'echo IyEvYmluL2Jhc2gKQUQ9L2hvbWUvYWdlbnRhZG1pbi9hZ2VudApbIC1kICIkQUQvc2NhZmZvbGQiIF0gJiYgQUQ9IiRBRC9zY2FmZm9sZCIKWyAtZiAiJEFEL3NjcmlwdHMvaW50YWtlLXN3ZWVwLnNoIiBdIHx8IGV4aXQgMApleGVjIGJhc2ggIiRBRC9zY3JpcHRzL2ludGFrZS1zd2VlcC5zaCIgIiRAIgo= | base64 -d > /usr/local/bin/agent-intake-sweep && chmod 0755 /usr/local/bin/agent-intake-sweep'
   - 'printf "[Unit]\nDescription=Fleet agent intake sweep from the store\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/agent-intake-sweep\n" > /etc/systemd/system/agent-intake-sweep.service'
   - 'printf "[Unit]\nDescription=Fleet agent intake sweep timer\n\n[Timer]\nOnBootSec=2min\nOnUnitActiveSec=5min\n\n[Install]\nWantedBy=timers.target\n" > /etc/systemd/system/agent-intake-sweep.timer'
   - 'systemctl daemon-reload && systemctl enable --now agent-intake-sweep.timer || echo "intake sweep timer enable failed (non-fatal)"'

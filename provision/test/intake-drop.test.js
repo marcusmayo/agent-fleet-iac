@@ -69,4 +69,8 @@ test('cloud-init installs the sweep timer', () => {
   const wrapper = Buffer.from(b64, 'base64').toString('utf8');
   assert.match(wrapper, /intake-sweep\.sh/);
   assert.match(wrapper, /exit 0/, 'no-ops rather than failing on a profile that has not vendored it');
+  // -f, never -x: vendored scripts are committed from Windows and land 100644 (backup-push.sh is
+  // 644 today), so an -x guard would be false on every agent and the sweep would never run.
+  assert.match(wrapper, /\[ -f /, 'the guard must test for the file, not the exec bit');
+  assert.ok(!/\[ -x /.test(wrapper), 'an -x guard silently disables the sweep on every agent');
 });
