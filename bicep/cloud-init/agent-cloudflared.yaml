@@ -26,8 +26,10 @@ runcmd:
   # on this VM -- a repair, a seed, anything future -- stamps a hostname fallback or fails
   # outright in a run-command shell that has no HOME. Repo-local (not --global, not --system),
   # so it lives in .git/config, survives every rebuild, and never depends on who is running git.
+  # The NAME carries the machine identity; the email is the fleet's one REAL address for every
+  # machine, because per-machine addresses would not exist and git refuses an empty one.
   - git -C /home/__ADMIN_USER__/agent config user.name '__AGENT_NAME__'
-  - git -C /home/__ADMIN_USER__/agent config user.email '__AGENT_NAME__@keel-pm.com'
+  - git -C /home/__ADMIN_USER__/agent config user.email 'keel@keel-pm.com'
   # Agent root: keel-style repos put infra/ at the clone root; Castor keeps it under
   # scaffold/. Detect and use the right dir (safe no-op for keel — no scaffold/).
   - 'if [ -d "/home/__ADMIN_USER__/agent/scaffold" ]; then AGENT_DIR="/home/__ADMIN_USER__/agent/scaffold"; else AGENT_DIR="/home/__ADMIN_USER__/agent"; fi; echo "agent dir: $AGENT_DIR"'

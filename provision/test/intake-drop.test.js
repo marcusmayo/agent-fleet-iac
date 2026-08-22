@@ -82,7 +82,10 @@ test('cloud-init sets the committer identity at birth, repo-local, from the depl
   // Repo-local (.git/config): --global would live in a HOME that run-command shells do not
   // have, and --system would name every checkout on the box after one agent.
   assert.ok(ci.includes("config user.name '__AGENT_NAME__'"), 'name from the deploy-time placeholder');
-  assert.ok(ci.includes("config user.email '__AGENT_NAME__@keel-pm.com'"), 'email under the fleet domain');
+  // one REAL address for every machine identity: per-machine addresses do not exist, and git
+  // refuses an empty email -- which would be the original hostname-fallback-or-fail mode back
+  assert.ok(ci.includes("config user.email 'keel@keel-pm.com'"), 'the fleet address, not an invented per-agent one');
+  assert.ok(!ci.includes('__AGENT_NAME__@'), 'no fabricated per-agent address anywhere');
   assert.ok(!/config --global user\./.test(ci) && !/config --system user\./.test(ci), 'identity stays repo-local');
   const plane = fs.readFileSync(path.resolve(__dirname, '..', '..', 'bicep', 'cloud-init', 'aegis-cloudflared.yaml'), 'utf8');
   assert.strictEqual(plane.split("config user.name 'aegis-vm'").length - 1, 2, 'both plane checkouts speak as the plane');
