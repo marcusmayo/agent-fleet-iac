@@ -105,10 +105,16 @@ function printPlan(v, R) {
   console.log(c.dim(`     -> az deployment sub create -> ${d.azure.resourceGroup} + ${d.azure.vmName} + vault/identity`));
   console.log(c.dim('     then ensures: backup container + MSI role in the fleet store · reads back: vault roles (agent identity, deployer)'));
 
-  console.log(c.bold('\nAfter up') + c.dim('  (cloud-init builds + brands ~4-8 min, then WAITS for its vault seed):'));
-  console.log(c.dim(`     fleetctl set-secrets ${v.name}                                 (seed vault; VM self-configures, no SSH)`));
-  console.log(c.dim(`     fleetctl check agents/${v.name}.agent.jsonc --live                    (200 = healthy · 502/530 = still building or waiting for its seed)`));
-  console.log(c.dim('     Panel → Provisioning → Enroll an existing agent                    (adopt it into the hosted control plane)'));
+  // Three steps, numbered, with the phrase spelled out. This used to be a paragraph of next
+  // steps and the enrol line sat at the end of it -- an operator provisioned an agent, saw it
+  // healthy, and then found it missing from the panel, because a reminder nobody reads is not
+  // a reminder. An agent is not in the fleet until the plane that runs the panel knows it.
+  console.log(c.bold('\nAfter up') + c.dim('  (cloud-init builds + brands ~4-8 min, then WAITS for its vault seed)'));
+  console.log(c.bold('  1. seed the vault  ') + c.dim(`fleetctl set-secrets ${v.name}`) + c.dim('   — the VM self-configures once seeded (no SSH)'));
+  console.log(c.bold('  2. verify          ') + c.dim(`fleetctl check agents/${v.name}.agent.jsonc --live`) + c.dim('   — 200 is the only PASS (502/530 = still building or waiting)'));
+  console.log(c.bold('  3. ENROL it        ') + c.dim('Panel → Provisioning → Enroll an existing agent, or:'));
+  console.log(c.dim(`                     fleetctl enroll ${v.name} --plane=<plane> --go --attest "I approve enrolling ${v.name} in the control plane <plane>"`));
+  console.log(c.yellow(`                     Until this runs, ${v.name} is healthy but INVISIBLE to the hosted panel — two planes, two registries.`));
 
   const gate = policy.checkProvision(R.pol, { currentFleet: R.fleet, names: [v.name], region: v.region });
   const regionOk = Array.isArray(R.pol.allowedRegions) && R.pol.allowedRegions.includes(v.region);

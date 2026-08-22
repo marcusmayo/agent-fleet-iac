@@ -8,7 +8,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const LIVE = /\b(bosun|heimdall)\b/i;
+const LIVE = /\b(bosun|heimdall|smalt)\b/i;
 const ROOT = path.resolve(__dirname, '..', '..');
 const SCAN = ['provision/lib', 'provision/bin', 'scripts', 'core', 'bicep', 'README.md', 'provision/README.md'];
 const EXT = new Set(['.js', '.sh', '.ps1', '.bicep', '.bicepparam', '.yaml', '.yml', '.md', '.jsonc', '.json']);
