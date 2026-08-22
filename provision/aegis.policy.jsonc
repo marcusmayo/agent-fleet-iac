@@ -10,7 +10,7 @@
   // Agents that decommission MUST refuse to tear down. Changing this list is an
   // attested policy.set (value = comma-separated names, or `none` to clear); the
   // set also syncs an Azure CanNotDelete lock onto each protected rg-<name>.
-  "protectedAgents": [],
+  "protectedAgents": ["smalt"],
   // Agent-to-agent relay allowlist -- DIRECTED pairs "from>to". Empty means no relay
   // is possible; the capability does not exist until an operator attests a pair.
   // Aegis is always the mediator: no agent has a network path to another.
