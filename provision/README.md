@@ -1,4 +1,4 @@
-# agent-fleet provisioning CLI (`fleetctl`)
+# fleet provisioning CLI (`fleetctl`)
 
 A phased, contract-validated wrapper over the same Bicep + Cloudflare provisioning
 you run by hand. Each agent is described by one committed, secret-free contract at
@@ -115,6 +115,11 @@ costs money rather than losing anything.
 - **`restore <agent> [--blob n]`** — **a MERGE, not a rewind.** The snapshot is written back
   over the live volumes and anything created since it is **kept**. That is deliberate: a
   recovery must never silently delete work written after the backup.
+- **`restore <agent> --clean --attest "I approve a clean restore of <agent>"`** — the true
+  rewind, behind an exact typed phrase. The archive is verified **readable before anything is
+  wiped** (a corrupt download aborts with the volumes intact), containers stop, the volumes are
+  emptied, the snapshot is extracted, ownership repaired. Everything written since that
+  snapshot is deleted, as attested. A wrong phrase refuses before a single az call.
 
 ## Intake — getting files to an agent
 

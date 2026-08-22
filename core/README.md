@@ -1,7 +1,7 @@
 # fleet-core (shared agent core)
 
 Canonical shared source for the agent fleet (Castor / Keel profiles), living in
-`agent-fleet-iac/core/` and vendored into each agent repo with build-time hash checks.
+`fleet/core/` and vendored into each agent repo with build-time hash checks.
 **Edit shared code here, once.**
 
 ## Why vendored (not fetched)
@@ -11,7 +11,7 @@ clone-and-deploy any agent with zero build-time network dependency. Shared files
 committed *in* each agent; a SHA256 manifest carried in a `.fleet-core-version` stamp
 plus an in-build `verify-core.sh` guarantee a vendored copy can never silently drift.
 
-## Layout (agent-fleet-iac/core/)
+## Layout (fleet/core/)
 
     *.js                  modules that vendor into each agent's scripts/ dir
       model-routing.js      tier resolver + slug selection + gateway-config gen
@@ -34,9 +34,9 @@ Change a shared module **only in core/ here**, then propagate:
     ( cd provision && npm test )              # fails while core/ and a manifest disagree
     git add core/<changed> core/manifest.sha256 core/gate/manifest.sha256 && git commit -m "core: <what>" && git push
 
-    # 2. sync into each agent repo (from an agent-fleet-iac checkout):
+    # 2. sync into each agent repo (from a fleet checkout):
     ./core/sync-core.sh ~/castor                    scaffold/scripts scaffold/gate
-    ./core/sync-core.sh ~/keel-portfolio-management scripts          gate
+    ./core/sync-core.sh ~/keel scripts          gate
 
     #    (sync-core REFUSES to vendor from a stale manifest -- it regenerates it and asks for the commit first,
     #     so a stamp always names a commit whose manifest is true)

@@ -21,7 +21,7 @@ into each agent, one Bicep module, per-agent isolation, Cloudflare-Tunnel transp
 | `<extra-name>` | `castor` | added **via the frontend**, then decommissioned | `rg-<extra-name>` |
 
 **One shared core, two distinct images.** Both profiles vendor the **same fleet-core modules** — a
-deterministic shared core (`agent-fleet-iac/core/`) that's byte-hash-verified at build time, so a
+deterministic shared core (`fleet/core/`) that's byte-hash-verified at build time, so a
 drifted copy fails the build. But each profile is *its own image*: `castor` adds its intake / vision
 / notification surface, `keel` its portfolio engine. Only the shared core is identical across
 profiles; the profile-specific code, the Dockerfile, and the `agentProfile` parameter differ. Each
@@ -32,7 +32,7 @@ default; the webchat rides an outbound-only Cloudflare Tunnel.
 
 ## Shared core (fleet-core)
 
-`agent-fleet-iac/core/` is the single source for code shared across profiles — the model router
+`fleet/core/` is the single source for code shared across profiles — the model router
 (`model-routing.js`), the capability-registry reader (`capability.js`), the egress / Can't-Shouldn't
 gate (`gate/*.js`), plus audit, redaction, notify, health, and scan modules. Each agent repo
 **vendors** these (it never fetches at build), so it stays hermetically buildable. A SHA256 manifest
@@ -47,9 +47,9 @@ Propagate a change deliberately:
 ( cd core/gate && sha256sum *.js ) > core/gate/manifest.sha256
 git add core/<changed> && git commit -m "core: <what>" && git push
 
-# 2. sync into each agent repo (from an agent-fleet-iac checkout):
+# 2. sync into each agent repo (from a fleet checkout):
 ./core/sync-core.sh ~/castor                    scaffold/scripts scaffold/gate
-./core/sync-core.sh ~/keel-portfolio-management scripts          gate
+./core/sync-core.sh ~/keel scripts          gate
 
 # 3. in each agent repo: commit the vendored files + .fleet-core-version, rebuild --no-cache.
 ```
@@ -68,7 +68,7 @@ A new agent Aegis spins up inherits whatever core was last synced into the agent
 - This bundle unzipped locally; run all commands from its root.
 
 ```
-agent-fleet-iac/
+fleet/
 ├── core/                             # shared modules vendored into each agent (model-routing, capability, gate/…)
 │   ├── *.js   manifest.sha256        # scripts-dest modules + drift manifest
 │   ├── gate/*.js  gate/manifest.sha256
@@ -290,7 +290,7 @@ the same `up` runbook drives both. What differs:
 
 | | Keel | Castor |
 | --- | --- | --- |
-| default build repo | `keel-portfolio-management` | `castor` |
+| default build repo | `keel` | `castor` |
 | Azure extras | VM only | + per-agent **Key Vault**, user-assigned **managed identity**, blob **backup** (the `wantsVault` branch in `vm.bicep`) |
 | deployer object id | not needed | resolved (`az ad signed-in-user show`) for the Key Vault Secrets Officer grant |
 | bootstrap secrets | TOTP + Anthropic key | TOTP + model/vision keys (LiteLLM/OpenRouter) |
