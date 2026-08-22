@@ -20,8 +20,8 @@ param agentProfile string
 @description('Azure region.')
 param location string = 'eastus2'
 
-@description('VM size. Default Standard_D2s_v3: 2 vCPU / 8 GiB — B2s_v2 is NotAvailableForSubscription on this subscription.')
-param vmSize string = 'Standard_D2s_v3'
+@description('VM size. Default Standard_B2als_v2: 2 vCPU / 4 GiB — the size the fleet actually runs; the old D-family default cost 3x. (B2s_v2 is NotAvailableForSubscription here.)')
+param vmSize string = 'Standard_B2als_v2'
 
 @description('Admin username on the VM.')
 param adminUsername string = 'agentadmin'

@@ -8,7 +8,7 @@ using '../main.bicep'
 param agentName = readEnvironmentVariable('AGENT_NAME', 'helm')
 param agentProfile = 'keel'
 param location = readEnvironmentVariable('AZ_LOCATION', 'eastus2')
-param vmSize = readEnvironmentVariable('VM_SIZE', 'Standard_D2s_v3')
+param vmSize = readEnvironmentVariable('VM_SIZE', 'Standard_B2als_v2')
 param adminUsername = readEnvironmentVariable('ADMIN_USER', 'agentadmin')
 param sshPublicKey = readEnvironmentVariable('SSH_PUBKEY', '')
 param sshAccessCidr = readEnvironmentVariable('SSH_CIDR', '')
