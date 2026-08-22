@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # sync-core.sh -- vendor fleet-core's canonical shared modules into an agent repo.
-# Lives in agent-fleet-iac/core/. Run from an agent-fleet-iac checkout.
+# Lives in fleet/core/. Run from a fleet checkout.
 #
 # Usage:  ./core/sync-core.sh <agent-repo-root> <scripts-dest> [gate-dest]
 #   e.g.  ./core/sync-core.sh ~/castor                    scaffold/scripts scaffold/gate
-#         ./core/sync-core.sh ~/keel-portfolio-management scripts          gate
+#         ./core/sync-core.sh ~/keel scripts          gate
 #
 # Vendors core/*.js (+ fetch-secret.sh + verify-core.sh + a stamp) into <scripts-dest>,
 # and if a <gate-dest> is given, core/gate/*.js (+ verify-core.sh + a stamp) into it too.
@@ -43,7 +43,7 @@ refresh_manifest "$HERE" "$HERE/manifest.sha256" || STALE=1
 if [ -d "$HERE/gate" ]; then refresh_manifest "$HERE/gate" "$HERE/gate/manifest.sha256" || STALE=1; fi
 if [ "$STALE" = 1 ]; then
   echo "REFUSING to vendor: fleet-core's committed manifest did not match core/ -- it has been REGENERATED in place."
-  echo "  Commit core/manifest.sha256 (and core/gate/manifest.sha256) in agent-fleet-iac, then re-run sync-core."
+  echo "  Commit core/manifest.sha256 (and core/gate/manifest.sha256) in fleet, then re-run sync-core."
   echo "  A stamp must name a commit whose manifest is true; 'npm test' in provision/ fails on this drift too."
   exit 1
 fi
