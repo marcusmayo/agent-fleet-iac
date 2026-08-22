@@ -53,6 +53,7 @@ function rebuildScript({ profile, head }) {
     'echo "=== 5. bootstrap ==="',
     'sudo -u agentadmin bash "$AD/infra/scripts/bootstrap.sh" 2>&1 | tail -20',
     'echo "=== 6. read back ==="',
+    'echo "committer identity: $(git -C "$REPO" config user.name || echo MISSING) <$(git -C "$REPO" config user.email || echo MISSING)>"',
     'sudo docker ps --format \'{{.Names}}  {{.Status}}  {{.Image}}\' | grep -E "^${PROFILE}-" || echo "NONE RUNNING"',
     'sudo docker exec "${PROFILE}-webchat" node -e \'try{const a=require("/app/scripts/auth");console.log("agent name: "+(a.readAgentName?a.readAgentName("/app"):"(no readAgentName)"))}catch(e){console.log("(auth not loadable: "+e.message+")")}\' 2>&1 | head -3',
     'curl -s -o /dev/null -w \'local health: %{http_code}\\n\' http://127.0.0.1:8443/health/liveliness 2>/dev/null || echo "local probe failed (the real check is fleetctl check --live)"',

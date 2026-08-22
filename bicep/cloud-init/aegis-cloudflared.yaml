@@ -53,6 +53,12 @@ runcmd:
   # runcmd under set -e (learned the hard way on the agent lane).
   - git config --system --add safe.directory /home/__ADMIN_USER__/aegis
   - git config --system --add safe.directory /home/__ADMIN_USER__/agent-fleet-iac
+  # Same rule as the agents: the checkout carries its committer identity from birth, named as
+  # the plane -- the label its tokens and its ledger already use.
+  - git -C /home/__ADMIN_USER__/aegis config user.name 'aegis-vm'
+  - git -C /home/__ADMIN_USER__/aegis config user.email 'aegis-vm@keel-pm.com'
+  - git -C /home/__ADMIN_USER__/agent-fleet-iac config user.name 'aegis-vm'
+  - git -C /home/__ADMIN_USER__/agent-fleet-iac config user.email 'aegis-vm@keel-pm.com'
   - 'cd /home/__ADMIN_USER__/aegis && npm install --omit=dev --no-audit --no-fund 2>&1 | tail -5 | tee -a /var/log/aegis-provision.log'
   - printf 'KEY_VAULT_NAME=%s\nMSI_CLIENT_ID=%s\nFLEET_IAC_ROOT=%s\n' '__KEY_VAULT_NAME__' '__MSI_CLIENT_ID__' '/home/__ADMIN_USER__/agent-fleet-iac' > /home/__ADMIN_USER__/aegis/.provision-flags
   # The LIVE policy is an untracked copy of the repo default: attested changes land here (and in

@@ -22,6 +22,12 @@ runcmd:
   - git clone '__REPO_URL__' /home/__ADMIN_USER__/agent
   - 'if [ -n "__REPO_REF__" ]; then git -C /home/__ADMIN_USER__/agent checkout --quiet "__REPO_REF__" || { echo "ABORT: repoRef __REPO_REF__ did not resolve" | tee /var/log/agent-image-build.log; exit 1; }; fi'
   - 'git -C /home/__ADMIN_USER__/agent rev-parse HEAD | tee /var/log/agent-built-sha.log'
+  # Committer identity is a property of the CHECKOUT, set at birth. Without it, any commit made
+  # on this VM -- a repair, a seed, anything future -- stamps a hostname fallback or fails
+  # outright in a run-command shell that has no HOME. Repo-local (not --global, not --system),
+  # so it lives in .git/config, survives every rebuild, and never depends on who is running git.
+  - git -C /home/__ADMIN_USER__/agent config user.name '__AGENT_NAME__'
+  - git -C /home/__ADMIN_USER__/agent config user.email '__AGENT_NAME__@keel-pm.com'
   # Agent root: keel-style repos put infra/ at the clone root; Castor keeps it under
   # scaffold/. Detect and use the right dir (safe no-op for keel — no scaffold/).
   - 'if [ -d "/home/__ADMIN_USER__/agent/scaffold" ]; then AGENT_DIR="/home/__ADMIN_USER__/agent/scaffold"; else AGENT_DIR="/home/__ADMIN_USER__/agent"; fi; echo "agent dir: $AGENT_DIR"'

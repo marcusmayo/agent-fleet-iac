@@ -77,6 +77,23 @@ test('cloud-init is parseable YAML -- a stray apostrophe inside a single-quoted 
   assert.deepStrictEqual(bad, [], 'unescaped apostrophe inside a single-quoted runcmd entry:\n  ' + bad.join('\n  '));
 });
 
+test('cloud-init sets the committer identity at birth, repo-local, from the deploy-time name', () => {
+  const ci = fs.readFileSync(path.resolve(__dirname, '..', '..', 'bicep', 'cloud-init', 'agent-cloudflared.yaml'), 'utf8');
+  // Repo-local (.git/config): --global would live in a HOME that run-command shells do not
+  // have, and --system would name every checkout on the box after one agent.
+  assert.ok(ci.includes("config user.name '__AGENT_NAME__'"), 'name from the deploy-time placeholder');
+  assert.ok(ci.includes("config user.email '__AGENT_NAME__@keel-pm.com'"), 'email under the fleet domain');
+  assert.ok(!/config --global user\./.test(ci) && !/config --system user\./.test(ci), 'identity stays repo-local');
+  const plane = fs.readFileSync(path.resolve(__dirname, '..', '..', 'bicep', 'cloud-init', 'aegis-cloudflared.yaml'), 'utf8');
+  assert.strictEqual(plane.split("config user.name 'aegis-vm'").length - 1, 2, 'both plane checkouts speak as the plane');
+});
+
+test('rebuild reads the committer identity back, so a checkout missing one is visible', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'rebuild.js'), 'utf8');
+  assert.match(src, /committer identity/);
+  assert.match(src, /MISSING/, 'absence prints as MISSING rather than as silence');
+});
+
 test('cloud-init installs the sweep timer', () => {
   const ci = fs.readFileSync(path.resolve(__dirname, '..', '..', 'bicep', 'cloud-init', 'agent-cloudflared.yaml'), 'utf8');
   assert.ok(ci.includes('agent-intake-sweep.timer'), 'timer unit');
