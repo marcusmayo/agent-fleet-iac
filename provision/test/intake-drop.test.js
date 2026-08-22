@@ -49,6 +49,11 @@ test('the sweep script exists, is executable shell, and stages only', () => {
   assert.ok(src.includes('staging'), 'it lands in staging');
   // the sweep must never reach into the profile pipeline itself -- that is Process
   assert.ok(!/inbox\/drop|exports\/inbound/.test(src), 'the sweep must not know any profile pipeline dir');
+  // Process unlinks a staged file from INSIDE the container, and unlink needs write on the
+  // parent -- a root-owned staging dir makes every Process fail while listing works perfectly.
+  // A clean restore surfaced it: tar recreated staging root-owned, and only the volume root
+  // gets the ownership repair. The sweep re-asserts the dir's owner every pass, self-healing.
+  assert.match(src, /chown "\$OWN" "\$STAGE"/, 'the staging DIR ownership is re-asserted every sweep');
 });
 
 test('the sweep is in the vendored set in BOTH implementations, or the manifest lies', () => {
