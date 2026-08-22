@@ -61,6 +61,12 @@ function gather(v, opts) {
     cfToken: process.env.CF_API_TOKEN || '',
     accountId: process.env.CF_ACCOUNT_ID || '',
     operatorEmail: (v.operatorEmail || process.env.CF_OPERATOR_EMAIL || '').trim(),   // contract field wins (per-agent)
+    // The service token's name, computed ONCE here so the plan and the execution cannot disagree
+    // about it. It used to be built twice from `opts` -- and `printPlan` never received `opts`,
+    // so `up` threw a ReferenceError while PRINTING the plan, before the preflight and before
+    // any API call, on both the plan and the --go path. A name the plan states and the run then
+    // derives separately is a divergence waiting to happen; there is one value now.
+    tokenName: `${planeName(opts.plane)}-${v.name}`,
   };
 }
 
@@ -83,20 +89,20 @@ function printPlan(v, R) {
   console.log(c.dim(`     -> tunnel "${v.name}", DNS ${d.cloudflare.fqdn}, app "${v.name}", policy ${v.name}-operator; tunnel token captured (redacted)`));
 
   console.log(c.bold('\n2. Service token') + c.dim('  (Cloudflare API)'));
-  console.log(`     POST /accounts/{acct}/access/service_tokens   { "name": "${planeName(opts.plane)}-${v.name}" }`);
+  console.log(`     POST /accounts/{acct}/access/service_tokens   { "name": "${R.tokenName}" }`);
   console.log(c.dim('     -> client_id + client_secret (secret written ONLY to aegis.config.json, never printed)'));
 
   console.log(c.bold('\n3. Service Auth policy') + c.dim('  (Cloudflare API)'));
   console.log(`     find app by domain ${d.cloudflare.fqdn} -> app_id`);
   console.log(`     POST /accounts/{acct}/access/apps/{app_id}/policies`);
-  console.log(`          { "name": "${planeName(opts.plane)}-${v.name}", "decision": "non_identity", "include": [{ "service_token": { "token_id": … } }] }`);
+  console.log(`          { "name": "${R.tokenName}", "decision": "non_identity", "include": [{ "service_token": { "token_id": … } }] }`);
 
   console.log(c.bold('\n4. Register') + c.dim('  (local, idempotent)'));
   console.log(`     upsert { name: ${v.name}, profile: ${v.profile}, host: ${d.cloudflare.fqdn}, clientId, clientSecret } into aegis.config.json`);
 
   console.log(c.bold('\n5. Deploy the VM') + c.red('  — BILLABLE') + c.dim('  (scripts/deploy.sh)'));
   console.log(`     bash scripts/deploy.sh ${v.profile} ${v.name}   ${c.dim('(env: CF_TUNNEL_TOKEN, SSH_PUBKEY, SSH_CIDR, REPO_*)')}`);
-  console.log(c.dim(`     -> az deployment sub create -> ${d.azure.resourceGroup} + ${d.azure.vmName} + vault/identity${v.profile === 'castor' ? '/backup-account' : ''}`));
+  console.log(c.dim(`     -> az deployment sub create -> ${d.azure.resourceGroup} + ${d.azure.vmName} + vault/identity`));
   console.log(c.dim('     then ensures: backup container + MSI role in the fleet store · reads back: vault roles (agent identity, deployer)'));
 
   console.log(c.bold('\nAfter up') + c.dim('  (cloud-init builds + brands ~4-8 min, then WAITS for its vault seed):'));
@@ -273,7 +279,7 @@ async function runUp(file, opts = {}) {
     //    provisions an agent holds a token labelled as itself, so provisioning from the hosted
     //    plane leaves nothing for enroll to add, and a workstation up is labelled as what it is.
     //    (It used to be aegis-<agent> from every plane -- indistinguishable in the agent's chain.)
-    const tokenName = `${planeName(opts.plane)}-${v.name}`;
+    const tokenName = R.tokenName;   // the same value the plan printed, not a second derivation
     step(2, `Service token ${tokenName} (Cloudflare API)`);
     const existing = await cf.findServiceTokenByName(R.accountId, tokenName, R.cfToken);
     let token;
@@ -349,4 +355,4 @@ async function runUp(file, opts = {}) {
   }
 }
 
-module.exports = { runUp, deployEnv };
+module.exports = { runUp, deployEnv, gather, printPlan };
