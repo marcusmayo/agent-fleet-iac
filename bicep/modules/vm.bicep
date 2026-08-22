@@ -32,21 +32,20 @@ var wantPublicIp = !empty(sshAccessCidr)
 // Key Vault Secrets User, READ-ONLY). No secrets are created here; the deployer seeds
 // them post-apply via `az keyvault secret set`, and bootstrap.sh fetches them with a
 // retry loop to absorb RBAC propagation lag (Bicep has no time_sleep equivalent).
-// Blob backup (storage account + Storage Blob Data Contributor) stays Castor-only for
-// now — Keel gains it later if/when it activates the azure_backup capability.
+// There is no per-agent backup account any more. One was created for every castor-profile
+// agent -- a storage account, a blob service, a 'backups' container and a role assignment --
+// and nothing ever wrote to it: agents back up to the FLEET store (rg-fleet-backups, one
+// container per agent, wired post-deploy by backup.ensureAgentBackup), whose name arrives as
+// __BACKUP_ACCOUNT__ in .provision-flags. Provisioning a castor agent therefore built a second,
+// empty, billable store it would never touch. Removed rather than left dormant: a resource that
+// exists is a resource someone eventually believes in.
 var wantsVault = true
-var wantsBackup = agentProfile == 'castor'
 var suffix = substring(uniqueString(subscription().id, agentName), 0, 5)
 var kvName = '${agentName}-kv-${suffix}'
-// Storage-account names: 3-24 chars, lowercase letters + digits ONLY (no hyphens).
-// Strip hyphens and cap the base at 17 so base + 'sa'(2) + suffix(5) <= 24.
-// No-op for hyphen-free names — an existing hyphen-free agent's SA re-derives identically.
-var saName = toLower('${take(replace(agentName, '-', ''), 17)}sa${suffix}')
 var uaiName = '${agentName}-identity'
 // Built-in role definition GUIDs (stable across clouds).
 var roleKvSecretsUser = '4633458b-17de-408a-b874-0445c86b69e6'
 var roleKvSecretsOfficer = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
-var roleStorageBlobContributor = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 
 // cloud-init: one file, placeholders replaced at deploy time. The tunnel token is
 // the only secret in customData and is scrubbed from cloud logs after install.
@@ -159,40 +158,6 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = if (wantsVault) {
   }
 }
 
-resource backupStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = if (wantsBackup) {
-  name: saName
-  location: location
-  sku: {
-    name: 'Standard_LRS'
-  }
-  kind: 'StorageV2'
-  properties: {
-    minimumTlsVersion: 'TLS1_2'
-    supportsHttpsTrafficOnly: true
-    // Backups are written by the VM's managed identity — no account keys on the VM.
-    allowBlobPublicAccess: false
-  }
-}
-
-resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = if (wantsBackup) {
-  parent: backupStorage
-  name: 'default'
-  properties: {
-    isVersioningEnabled: true
-    deleteRetentionPolicy: {
-      enabled: true
-      days: 14
-    }
-  }
-}
-
-resource backupsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = if (wantsBackup) {
-  parent: blobService
-  name: 'backups'
-  properties: {
-    publicAccess: 'None'
-  }
-}
 
 // identity -> read secrets.
 // This assignment is BEST-EFFORT and is verified after the deploy by `up` (ensureVaultRoles),
@@ -214,18 +179,6 @@ resource raKvSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
   }
 }
 
-// identity -> write backups (data plane; no account keys on the VM)
-resource raStorageBlob 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (wantsBackup) {
-  // best-effort like raKvSecretsUser; the fleet backup store's role is reconciled post-deploy by
-  // backup.ensureAgentBackup, which reads the principal back and is idempotent
-  name: guid(backupStorage.id, uaiName, roleStorageBlobContributor)
-  scope: backupStorage
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleStorageBlobContributor)
-    principalId: uai!.properties.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
 
 // deployer -> create the operator secrets post-apply (az keyvault secret set)
 resource raKvSecretsOfficer 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (wantsVault && !empty(deployerObjectId)) {

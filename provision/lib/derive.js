@@ -5,7 +5,11 @@
 
 function derive(v) {
   const fqdn = `${v.name}.${v.domain}`;
-  const wantsVault = v.profile === 'castor';
+  // Every agent gets a per-agent Key Vault and a user-assigned identity -- vm.bicep has said
+  // `var wantsVault = true` since the vault became the first-boot secret path. This read still
+  // said castor-only, so `plan` hid the vault and the identity for a keel agent and then
+  // deployed both: a plan that under-reports what it is about to create is worse than no plan.
+  const wantsVault = true;
 
   return {
     azure: {

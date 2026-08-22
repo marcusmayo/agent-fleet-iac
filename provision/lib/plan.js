@@ -18,8 +18,8 @@ function preview(v) {
   kv('profile', d.azure.profile);
   if (d.azure.wantsVault) {
     kv('key vault', `${v.name}-kv-<suffix>  (RBAC; operator secrets set post-apply)`);
-    kv('identity', `${v.name}-identity  (user-assigned MSI: KV Secrets User + Storage Blob Contributor)`);
-    if (d.azure.profile === 'castor') kv('backup', `${v.name.replace(/-/g, '').slice(0, 17)}sa<suffix>  (identity-based blob backup)`);
+    kv('identity', `${v.name}-identity  (user-assigned MSI: Key Vault Secrets User)`);
+    kv('backup', 'fleet store, one container per agent — wired after the deploy, not by this template');
   }
   kv('repo', `${d.azure.repoUrl} @ ${d.azure.repoRef}`);
   kv('param file', d.azure.paramFile);

@@ -33,7 +33,7 @@ runcmd:
   # which left every provisioned checkout permanently dirty and made a git pull that touched
   # agent.yaml conflict -- the self-heal's fast-forward and any rebuild pull could not land such
   # a change. Verify loudly (fail the build rather than ship a mis-branded agent).
-  - 'printf "# written by cloud-init at provision -- the deploy-time name; the tracked agent.yaml keeps the profile default\nagent_name: \"__AGENT_NAME__\"\n" > "$AGENT_DIR/system/agent.local.yaml"'
+  - 'printf "# fleet overlay -- WRITTEN BY CLOUD-INIT AT PROVISION, DO NOT EDIT BY HAND.\n# This file is untracked and gitignored; it carries the deploy-time name only. The tracked\n# system/agent.yaml keeps the profile default and profile_name, and every reader takes this\n# file first (fleet-core auth.readAgentName). To change how the agent SPEAKS about itself at\n# runtime, edit state/persona.txt or use the Persona tab in the panel -- not this file, which is\n# rewritten on the next provision.\nagent_name: \"__AGENT_NAME__\"\n" > "$AGENT_DIR/system/agent.local.yaml"'
   - 'grep -qx "agent_name: \"__AGENT_NAME__\"" "$AGENT_DIR/system/agent.local.yaml" || { echo "ABORT: agent_name overlay not written for __AGENT_NAME__" | tee -a /var/log/agent-image-build.log; exit 1; }'
   # chown BEFORE the build so the tree is admin-owned even if the build fails, and
   # invoke the builder via bash so a missing +x bit on build-image.sh cannot

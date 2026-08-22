@@ -60,6 +60,23 @@ test('the sweep is in the vendored set in BOTH implementations, or the manifest 
   assert.match(manifest, /\bintake-sweep\.sh$/m, 'the regenerated manifest must carry it');
 });
 
+test('cloud-init is parseable YAML -- a stray apostrophe inside a single-quoted runcmd is not', () => {
+  const ci = fs.readFileSync(path.resolve(__dirname, '..', '..', 'bicep', 'cloud-init', 'agent-cloudflared.yaml'), 'utf8');
+  // Every runcmd entry is one single-quoted scalar. YAML ends such a scalar at the first
+  // apostrophe, so `panel's` silently truncates the line and the rest becomes garbage: a comment
+  // reading better cost a VM its overlay. Check the shape without pulling in a YAML dependency:
+  // inside a '...' entry, an apostrophe must be doubled ('') or absent.
+  const lines = ci.split('\n');
+  const bad = [];
+  lines.forEach((l, i) => {
+    const m = l.match(/^\s*-\s+'(.*)'\s*$/);
+    if (!m) return;
+    const body = m[1].split("''").join('');
+    if (body.includes("'")) bad.push((i + 1) + ': ' + l.trim().slice(0, 90));
+  });
+  assert.deepStrictEqual(bad, [], 'unescaped apostrophe inside a single-quoted runcmd entry:\n  ' + bad.join('\n  '));
+});
+
 test('cloud-init installs the sweep timer', () => {
   const ci = fs.readFileSync(path.resolve(__dirname, '..', '..', 'bicep', 'cloud-init', 'agent-cloudflared.yaml'), 'utf8');
   assert.ok(ci.includes('agent-intake-sweep.timer'), 'timer unit');

@@ -25,6 +25,7 @@ Usage:
   fleetctl backup   ls <container> [--prefix <p>] | get <container> <blob> [--out <path>]
   fleetctl backup   put <container> <file> [--as <blob>] | rehydrate <container> <blob> [--priority High|Standard]
   fleetctl intake   put <agent> <file...> | list <agent>
+  fleetctl rebuild  <contract.agent.jsonc> [--head <sha>] [--go]
   fleetctl aegis    plan <contract> | up <contract> --go --attest "<sentence>"
   fleetctl aegis    grant <contract> vault|contributor|backups [--go --attest "<sentence>"]
   fleetctl aegis    update <contract> [--go --attest "<sentence>"]
@@ -143,7 +144,7 @@ check/plan make no changes. register writes only to the local (gitignored) confi
 // bare flag and its value is read as a positional -- which is how `backup get --out <path>`
 // downloaded to the working directory while reporting success. Add the flag here the same
 // commit it is introduced, or --policy=x works and --policy x does not.
-const VALUED = new Set(['--aegis-config', '--policy', '--out', '--as', '--prefix', '--priority', '--tier', '--blob']);
+const VALUED = new Set(['--aegis-config', '--policy', '--out', '--as', '--prefix', '--priority', '--tier', '--blob', '--head']);
 
 function parseArgs(rest) {
   const flags = new Set();
@@ -221,6 +222,14 @@ async function main(argv) {
   // Runs where every fleetctl command runs -- on the Aegis host (this workstation, or the hosted
   // plane). Agents never run fleetctl; they are tunnel-only. From any other machine, use the
   // panel's upload, which stages over the same authenticated path.
+  // Rebuild an agent onto its repo HEAD. Was a hand-run sequence three times; the steps that
+  // matter are the ones that refuse, and a paste-by-hand sequence only refuses if the operator
+  // remembers to paste the refusal in.
+  if (cmd === 'rebuild') {
+    if (!file) { console.error(c.red('rebuild: missing <contract.agent.jsonc>')); return 2; }
+    return require('../lib/rebuild').runRebuild(file, { go: flags.has('--go'), head: opts['head'] });
+  }
+
   if (cmd === 'intake') {
     const bk = require('../lib/backup');
     const sub = args[1];
