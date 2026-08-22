@@ -470,12 +470,27 @@ function runRestore(name, opts = {}) {
     blob = blobs[blobs.length - 1];
   }
   if (!/^[A-Za-z0-9._-]{1,200}$/.test(blob)) { console.log(c.red('restore: blob name fails safe charset')); return 2; }
+  // What this actually does, said plainly. `agent-backup restore` extracts the tarball OVER the
+  // live volumes: every file in the snapshot is written back, and anything created SINCE the
+  // snapshot is left where it is. That is a merge, not a return to a point in time -- and the
+  // word restore implies the second. Proven on a fresh agent: a marker file written after the
+  // snapshot survived a restore that reported OK, with both containers healthy and the front
+  // door at 200, so nothing in the output would have told an operator. Merge is the right
+  // default for an agent whose volumes hold notes -- a recovery must not silently delete work
+  // written since the backup -- but an operator has to know which one they are getting.
   console.log(c.cyan(`restore ${name}  <-  ${blob}`));
+  console.log(c.yellow('  MERGE, not a rewind: every file in the snapshot is written back over the live volumes;'));
+  console.log(c.yellow('  anything created SINCE that snapshot is KEPT. To see what is about to be overlaid:'));
+  console.log(c.dim(`    fleetctl backup list ${name}          (snapshots held for this agent)`));
   console.log(c.dim('  (via az vm run-command; VM must be running; containers restart after extract)'));
   const r = runCapture('az', ['vm', 'run-command', 'invoke', '-g', 'rg-' + name, '-n', name + '-vm',
     '--command-id', 'RunShellScript', '--scripts', '/usr/local/bin/agent-backup restore ' + blob]);
   const out = (r.stdout || '');
-  if (r.ok && /restored:/.test(out)) { console.log(c.green('restore OK — ' + blob)); return 0; }
+  if (r.ok && /restored:/.test(out)) {
+    console.log(c.green('restore OK — ' + blob + ' written back over the live volumes'));
+    console.log(c.dim('  files created after that snapshot were kept; this was a merge, not a rewind'));
+    return 0;
+  }
   console.log(c.red('restore failed: ' + ((r.stderr || out || 'no output').split('\n').filter(Boolean)[0] || '').slice(0, 200)));
   console.log(c.dim('  note: /usr/local/bin/agent-backup exists on fleet-provisioned builds; legacy hand-built VMs gain it at rebuild.'));
   return 1;
