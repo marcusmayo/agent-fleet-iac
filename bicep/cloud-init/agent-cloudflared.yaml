@@ -86,6 +86,13 @@ runcmd:
   - 'printf "[Unit]\nDescription=Fleet agent backup push\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/agent-backup push\n" > /etc/systemd/system/agent-backup.service'
   - 'printf "[Unit]\nDescription=Daily fleet agent backup\n\n[Timer]\nOnCalendar=daily\nRandomizedDelaySec=1800\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n" > /etc/systemd/system/agent-backup.timer'
   - 'systemctl daemon-reload && systemctl enable --now agent-backup.timer || echo "backup timer enable failed (non-fatal)"'
+  # --- Weekly PII scan: runs the profile scanner over the app tree and writes the log the
+  # compliance board reads (stale past 8 days). Guard is -f, same reason as the sweep: vendored
+  # scripts land 100644. Persistent=true so a missed Sunday runs at next boot rather than never.
+  - 'echo IyEvYmluL2Jhc2gKQUQ9L2hvbWUvYWdlbnRhZG1pbi9hZ2VudApbIC1kICIkQUQvc2NhZmZvbGQiIF0gJiYgQUQ9IiRBRC9zY2FmZm9sZCIKWyAtZiAiJEFEL3NjcmlwdHMvcGlpLXNjYW4uc2giIF0gfHwgZXhpdCAwCmV4ZWMgYmFzaCAiJEFEL3NjcmlwdHMvcGlpLXNjYW4uc2giICIkQCIK | base64 -d > /usr/local/bin/agent-pii-scan && chmod 0755 /usr/local/bin/agent-pii-scan'
+  - 'printf "[Unit]\nDescription=Fleet agent weekly PII scan\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/agent-pii-scan\n" > /etc/systemd/system/agent-pii-scan.service'
+  - 'printf "[Unit]\nDescription=Fleet agent weekly PII scan timer\n\n[Timer]\nOnCalendar=Sun *-*-* 03:20:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n" > /etc/systemd/system/agent-pii-scan.timer'
+  - 'systemctl daemon-reload && systemctl enable --now agent-pii-scan.timer || echo "pii-scan timer enable failed (non-fatal)"'
   # --- Intake sweep: pulls operator drops from this agent's own container into staging, every
   # 5 min. STAGES ONLY -- Process is still the operator's decision. No-ops on an agent whose
   # profile has not vendored the script yet, and on a fleet with no backup store.
