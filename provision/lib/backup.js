@@ -461,6 +461,16 @@ function finalSnapshot(name) {
 }
 
 function runRestore(name, opts = {}) {
+  const clean = opts.clean === true;
+  if (clean) {
+    const required = 'I approve a clean restore of ' + name;
+    if (String(opts.attest || '').trim() !== required) {
+      console.log(c.red('restore --clean REFUSED — attestation must read exactly:'));
+      console.log(c.red('  ' + required));
+      console.log(c.dim('  a clean restore DELETES every file not present in the snapshot; the default (no --clean) merge does not need this'));
+      return 3;
+    }
+  }
   const acct = resolveAccount();
   if (!acct) { console.log(c.red('restore: store absent — run `fleetctl backup init`')); return 2; }
   let blob = opts.blob;
@@ -478,17 +488,27 @@ function runRestore(name, opts = {}) {
   // door at 200, so nothing in the output would have told an operator. Merge is the right
   // default for an agent whose volumes hold notes -- a recovery must not silently delete work
   // written since the backup -- but an operator has to know which one they are getting.
-  console.log(c.cyan(`restore ${name}  <-  ${blob}`));
-  console.log(c.yellow('  MERGE, not a rewind: every file in the snapshot is written back over the live volumes;'));
-  console.log(c.yellow('  anything created SINCE that snapshot is KEPT. To see what is about to be overlaid:'));
+  // Two modes, and the difference is the whole point of saying it out loud. Default is a MERGE:
+  // safe, additive, nothing written since the snapshot is lost. --clean is a REWIND: containers
+  // stopped, volumes emptied, the snapshot becomes the whole truth -- and because there is no
+  // undo past the wipe, it sits behind a typed attestation like every destructive lane here.
+  console.log(c.cyan(`restore ${name}  <-  ${blob}${clean ? '  [CLEAN]' : ''}`));
+  if (clean) {
+    console.log(c.red('  REWIND: containers are stopped, the volumes are EMPTIED, then the snapshot is extracted.'));
+    console.log(c.red('  Every file created since that snapshot is DELETED. The archive is verified readable before'));
+    console.log(c.red('  anything is touched, so a corrupt download aborts with the volumes intact.'));
+  } else {
+    console.log(c.yellow('  MERGE, not a rewind: every file in the snapshot is written back over the live volumes;'));
+    console.log(c.yellow('  anything created SINCE that snapshot is KEPT. For a true rewind: --clean --attest "I approve a clean restore of ' + name + '"'));
+  }
   console.log(c.dim(`    fleetctl backup list ${name}          (snapshots held for this agent)`));
   console.log(c.dim('  (via az vm run-command; VM must be running; containers restart after extract)'));
   const r = runCapture('az', ['vm', 'run-command', 'invoke', '-g', 'rg-' + name, '-n', name + '-vm',
-    '--command-id', 'RunShellScript', '--scripts', '/usr/local/bin/agent-backup restore ' + blob]);
+    '--command-id', 'RunShellScript', '--scripts', '/usr/local/bin/agent-backup restore ' + blob + (clean ? ' --clean' : '')]);
   const out = (r.stdout || '');
   if (r.ok && /restored:/.test(out)) {
-    console.log(c.green('restore OK — ' + blob + ' written back over the live volumes'));
-    console.log(c.dim('  files created after that snapshot were kept; this was a merge, not a rewind'));
+    console.log(c.green('restore OK — ' + blob + (clean ? ' is now the whole truth of the volumes' : ' written back over the live volumes')));
+    console.log(c.dim(clean ? '  clean restore: files created after that snapshot are gone, as attested' : '  files created after that snapshot were kept; this was a merge, not a rewind'));
     return 0;
   }
   console.log(c.red('restore failed: ' + ((r.stderr || out || 'no output').split('\n').filter(Boolean)[0] || '').slice(0, 200)));

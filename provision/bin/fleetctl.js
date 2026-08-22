@@ -33,7 +33,7 @@ Usage:
   fleetctl discover [--json] [--plane=<label>] [--aegis-config <path>]
   fleetctl migrate  <from> <to> [--scope=knowledge,claude,...] [--blob=<snapshot>] [--overwrite] [--go --attest "<sentence>"]
   fleetctl resize   <contract> --size=<Standard_...> [--go --attest "<sentence>"]
-  fleetctl restore  <agent> [--blob <name>]
+  fleetctl restore  <agent> [--blob <name>] [--clean --attest "I approve a clean restore of <agent>"]
   fleetctl --help
 
 Commands:
@@ -144,7 +144,7 @@ check/plan make no changes. register writes only to the local (gitignored) confi
 // bare flag and its value is read as a positional -- which is how `backup get --out <path>`
 // downloaded to the working directory while reporting success. Add the flag here the same
 // commit it is introduced, or --policy=x works and --policy x does not.
-const VALUED = new Set(['--aegis-config', '--policy', '--out', '--as', '--prefix', '--priority', '--tier', '--blob', '--head']);
+const VALUED = new Set(['--aegis-config', '--policy', '--out', '--as', '--prefix', '--priority', '--tier', '--blob', '--head', '--attest']);
 
 function parseArgs(rest) {
   const flags = new Set();
@@ -288,7 +288,7 @@ async function main(argv) {
     const agent = args[1];
     if (!agent) { console.error(c.red('restore: missing <agent>')); return 2; }
     const bi = args.indexOf('--blob');
-    return require('../lib/backup').runRestore(agent, { blob: bi > -1 ? args[bi + 1] : undefined });
+    return require('../lib/backup').runRestore(agent, { blob: bi > -1 ? args[bi + 1] : undefined, clean: flags.has('--clean'), attest: opts['attest'] });
   }
   if (cmd === 'up') {
     if (!file) { console.error(c.red('up: missing <contract.agent.jsonc>')); return 2; }
