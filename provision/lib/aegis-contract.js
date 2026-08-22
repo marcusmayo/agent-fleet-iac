@@ -33,7 +33,7 @@ const DEFAULTS = {
   adminUsername: 'aegisadmin',
   fleetVaultName: 'kv-keelpm-aegis',
   aegisRepoUrl: `https://github.com/${process.env.FLEET_REPO_ORG || 'marcusmayo'}/aegis.git`,
-  fleetRepoUrl: `https://github.com/${process.env.FLEET_REPO_ORG || 'marcusmayo'}/agent-fleet-iac.git`,
+  fleetRepoUrl: `https://github.com/${process.env.FLEET_REPO_ORG || 'marcusmayo'}/fleet.git`,
 };
 
 const ALLOWED_KEYS = new Set([

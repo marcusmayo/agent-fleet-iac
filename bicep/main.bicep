@@ -38,7 +38,7 @@ param cloudflareTunnelToken string
 
 @description('Git URL cloned by cloud-init to build the agent image (public repo).')
 @minLength(1)
-param repoUrl string = 'https://github.com/marcusmayo/keel-portfolio-management.git'
+param repoUrl string = 'https://github.com/marcusmayo/keel.git'
 
 @description('Git ref (branch, tag, or commit SHA) to check out for a reproducible, pinned build. Empty = default-branch HEAD. Pin this to the commit that carries your ADO lane.')
 param repoRef string = ''

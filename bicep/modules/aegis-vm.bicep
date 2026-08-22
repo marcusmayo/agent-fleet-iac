@@ -50,7 +50,7 @@ param cloudflareTunnelToken string
 param aegisRepoUrl string = 'https://github.com/marcusmayo/aegis.git'
 
 @description('Git URL for the fleet IaC repo — the control plane spawns fleetctl from this checkout.')
-param fleetRepoUrl string = 'https://github.com/marcusmayo/agent-fleet-iac.git'
+param fleetRepoUrl string = 'https://github.com/marcusmayo/fleet.git'
 
 @description('Git ref for both repos. Empty = default-branch HEAD.')
 param repoRef string = ''

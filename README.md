@@ -103,7 +103,7 @@ export SSH_CIDR="$(curl -s https://api.ipify.org)/32"
 
 # Optional: reproducible pinned build. Point REPO_URL at your fork and REPO_REF at
 # the exact commit/branch/tag to build. Leave REPO_REF unset to build default-branch HEAD.
-export REPO_URL="https://github.com/marcusmayo/keel-portfolio-management.git"
+export REPO_URL="https://github.com/marcusmayo/keel.git"
 export REPO_REF=""   # e.g. a commit SHA, or "feature/ado-normalizer"
 ```
 

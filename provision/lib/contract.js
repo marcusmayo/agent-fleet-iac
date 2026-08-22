@@ -20,7 +20,7 @@ const PROFILE_REPO = {
   // Forkable: FLEET_REPO_ORG swaps the GitHub org for the per-profile defaults; a contract's
   // explicit "repoUrl" field still overrides everything (any https .git URL).
   castor: `https://github.com/${process.env.FLEET_REPO_ORG || 'marcusmayo'}/castor.git`,
-  keel: `https://github.com/${process.env.FLEET_REPO_ORG || 'marcusmayo'}/keel-portfolio-management.git`,
+  keel: `https://github.com/${process.env.FLEET_REPO_ORG || 'marcusmayo'}/keel.git`,
 };
 
 // Matches deploy.sh, cloudflare-provision.ps1, and main.bicep (2-24, lowercase,
